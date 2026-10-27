@@ -1,0 +1,7 @@
+// Copy to Local.xcconfig (ignored). These are public values compiled into the app.
+AUTH0_DOMAIN = YOUR_TENANT.us.auth0.com
+AUTH0_CLIENT_ID = YOUR_IOS_NATIVE_APPLICATION_CLIENT_ID
+// xcconfig treats // as a comment; $() separates the slashes in URL values.
+AUTH0_AUDIENCE = https:/$()/YOUR_API_IDENTIFIER
+API_BASE_URL = https:/$()/YOUR_STAGING_API_HOST
+// Set the final identifier/team in Xcode Signing & Capabilities.

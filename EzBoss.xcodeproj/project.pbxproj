@@ -1,0 +1,227 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 56;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		A00000000000000000000014 /* EzBoss/EzBossApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = A00000000000000000000006 /* EzBoss/EzBossApp.swift */; };
+		B00000000000000000000004 /* Auth0 in Frameworks */ = {isa = PBXBuildFile; productRef = B00000000000000000000002 /* Auth0 */; };
+		C00000000000000000000011 /* EzBoss/Core/NativeConfiguration.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000001 /* EzBoss/Core/NativeConfiguration.swift */; };
+		C00000000000000000000012 /* EzBoss/Core/APIClient.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000002 /* EzBoss/Core/APIClient.swift */; };
+		C00000000000000000000013 /* EzBoss/Core/Session.swift in Sources */ = {isa = PBXBuildFile; fileRef = C00000000000000000000004 /* EzBoss/Core/Session.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXFileReference section */
+		A00000000000000000000006 /* EzBoss/EzBossApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EzBoss/EzBossApp.swift; sourceTree = "<group>"; };
+		A00000000000000000000007 /* EzBoss.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = EzBoss.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		C00000000000000000000001 /* EzBoss/Core/NativeConfiguration.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EzBoss/Core/NativeConfiguration.swift; sourceTree = "<group>"; };
+		C00000000000000000000002 /* EzBoss/Core/APIClient.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EzBoss/Core/APIClient.swift; sourceTree = "<group>"; };
+		C00000000000000000000003 /* Config/Shared.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Shared.xcconfig; sourceTree = "<group>"; };
+		C00000000000000000000004 /* EzBoss/Core/Session.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = EzBoss/Core/Session.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		B00000000000000000000003 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				B00000000000000000000004 /* Auth0 in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		A00000000000000000000003 = {
+			isa = PBXGroup;
+			children = (
+				C00000000000000000000001 /* EzBoss/Core/NativeConfiguration.swift */,
+				C00000000000000000000002 /* EzBoss/Core/APIClient.swift */,
+				C00000000000000000000003 /* Config/Shared.xcconfig */,
+				C00000000000000000000004 /* EzBoss/Core/Session.swift */,
+				A00000000000000000000006 /* EzBoss/EzBossApp.swift */,
+				A00000000000000000000004 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		A00000000000000000000004 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				A00000000000000000000007 /* EzBoss.app */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		A00000000000000000000005 /* EzBoss */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = A00000000000000000000008 /* Build configuration list for PBXNativeTarget "EzBoss" */;
+			buildPhases = (
+				A00000000000000000000009 /* Sources */,
+				B00000000000000000000003 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = EzBoss;
+			packageProductDependencies = (
+				B00000000000000000000002 /* Auth0 */,
+			);
+			productName = EzBoss;
+			productReference = A00000000000000000000007 /* EzBoss.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		A00000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				LastUpgradeCheck = 2600;
+			};
+			buildConfigurationList = A00000000000000000000002 /* Build configuration list for PBXProject "EzBoss" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				Base,
+			);
+			mainGroup = A00000000000000000000003;
+			packageReferences = (
+				B00000000000000000000001 /* XCRemoteSwiftPackageReference "Auth0.swift" */,
+			);
+			productRefGroup = A00000000000000000000004 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				A00000000000000000000005 /* EzBoss */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		A00000000000000000000009 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				A00000000000000000000014 /* EzBoss/EzBossApp.swift in Sources */,
+				C00000000000000000000011 /* EzBoss/Core/NativeConfiguration.swift in Sources */,
+				C00000000000000000000012 /* EzBoss/Core/APIClient.swift in Sources */,
+				C00000000000000000000013 /* EzBoss/Core/Session.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin XCBuildConfiguration section */
+		A00000000000000000000010 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		A00000000000000000000011 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CLANG_ENABLE_MODULES = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 17.0;
+				SDKROOT = iphoneos;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		A00000000000000000000012 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C00000000000000000000003 /* Config/Shared.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7393AZJ8PW;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = EzBoss/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = EzBoss;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = local.ezboss.development;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		A00000000000000000000013 /* Release */ = {
+			isa = XCBuildConfiguration;
+			baseConfigurationReference = C00000000000000000000003 /* Config/Shared.xcconfig */;
+			buildSettings = {
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = 7393AZJ8PW;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = EzBoss/Info.plist;
+				INFOPLIST_KEY_CFBundleDisplayName = EzBoss;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				MARKETING_VERSION = 0.1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = local.ezboss.development;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		A00000000000000000000002 /* Build configuration list for PBXProject "EzBoss" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000010 /* Debug */,
+				A00000000000000000000011 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		A00000000000000000000008 /* Build configuration list for PBXNativeTarget "EzBoss" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				A00000000000000000000012 /* Debug */,
+				A00000000000000000000013 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCRemoteSwiftPackageReference section */
+		B00000000000000000000001 /* XCRemoteSwiftPackageReference "Auth0.swift" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/auth0/Auth0.swift.git";
+			requirement = {
+				kind = exactVersion;
+				version = 2.25.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		B00000000000000000000002 /* Auth0 */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = B00000000000000000000001 /* XCRemoteSwiftPackageReference "Auth0.swift" */;
+			productName = Auth0;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = A00000000000000000000001 /* Project object */;
+}

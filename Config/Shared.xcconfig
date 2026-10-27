@@ -1,0 +1,7 @@
+// Only public mobile application configuration belongs here.
+// Keep secrets, provider credentials and tokens on the server.
+AUTH0_DOMAIN =
+AUTH0_CLIENT_ID =
+AUTH0_AUDIENCE =
+API_BASE_URL =
+#include? "Local.xcconfig"
