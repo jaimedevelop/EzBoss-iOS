@@ -1,0 +1,9 @@
+// Public staging values only. Copy to Staging.xcconfig after Auth0 setup.
+// A distinct bundle/keychain namespace preserves the installed demo app.
+#include "Shared.xcconfig"
+AUTH0_DOMAIN = dev-jllkm3kbdoo3n5cx.us.auth0.com
+PRODUCT_BUNDLE_IDENTIFIER = local.ezboss.development.staging
+EZBOSS_DISPLAY_NAME = EzBoss Staging
+AUTH0_CLIENT_ID = j5AZ1y7unFxXnRKpJaS9cb9emDt5JkpF
+AUTH0_AUDIENCE = https:/$()/api-staging.ezboss.pro
+API_BASE_URL = https:/$()/api-staging-7b72.up.railway.app

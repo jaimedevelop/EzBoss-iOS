@@ -1,3 +1,4 @@
+EZBOSS_DISPLAY_NAME = EzBoss
 // Only public mobile application configuration belongs here.
 // Keep secrets, provider credentials and tokens on the server.
 AUTH0_DOMAIN =

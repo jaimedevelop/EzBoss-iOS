@@ -9,6 +9,7 @@ private final class CredentialStore: SessionCredentialStore {
     var failure: Error?
     var loginCalls = 0
     var tokenCalls = 0
+    var onToken: (() -> Void)?
     var logoutCalls = 0
     var clears = 0
     var onLogin: (() async -> Void)?
@@ -21,6 +22,7 @@ private final class CredentialStore: SessionCredentialStore {
     }
     func accessToken() async throws -> String {
         tokenCalls += 1
+        onToken?()
         if let failure { throw failure }
         return "synthetic-access-token"
     }
@@ -48,6 +50,39 @@ final class SessionTests: XCTestCase {
                        api: APIClient(baseURL: config.api, protocolClasses: [StubProtocol.self]))
     }
 
+    func testBusiness403KeepsIdentityBut401RemovesIt() async throws {
+        for status in [403, 401] {
+            let store = CredentialStore(); let app = try session(store)
+            await app.restore()
+            do {
+                let _: Int = try await app.business { _, _ in throw status == 403 ? APIError.accessDenied : APIError.expiredSession }
+                XCTFail("Expected rejection")
+            } catch { }
+            if status == 403 { guard case .authenticated = app.state else { return XCTFail("Resource denial must retain identity") } }
+            else { guard case .failed(_, true) = app.state else { return XCTFail("401 must close protected access") } }
+        }
+    }
+    func testLateBusinessResponseCannotCrossLogoutOrRevalidation() async throws {
+        for logout in [true, false] {
+            let store = CredentialStore(); let app = try session(store)
+            await app.restore()
+            do {
+                let _: Int = try await app.business { _, _ in
+                    if logout { await app.signOut() } else { await app.restore() }
+                    return 42
+                }
+                XCTFail("Old request must be discarded")
+            } catch is CancellationError { }
+        }
+    }
+    func testBusinessRenewalFailureClosesProtectedAccess() async throws {
+        let store = CredentialStore(); let app = try session(store)
+        await app.restore(); store.failure = APIError.unavailable
+        do { let _: Int = try await app.business { _, _ in 42 }; XCTFail("Expected failure") } catch { }
+        guard case .failed(_, true) = app.state else { return XCTFail("Renewal failure must close access") }
+        XCTAssertFalse(store.hasSession)
+    }
+
     func testLoginClearsOldCredentialsAndLoadsAPIIdentity() async throws {
         let store = CredentialStore()
         let app = try session(store)
@@ -68,6 +103,16 @@ final class SessionTests: XCTestCase {
         XCTAssertEqual(store.loginCalls, 0)
         XCTAssertEqual(store.tokenCalls, 1)
         guard case .authenticated = app.state else { return XCTFail("Expected restored identity") }
+    }
+
+    func testForegroundValidationPreservesAuthenticatedViewWhileRequestRuns() async throws {
+        let store = CredentialStore(); let app = try session(store)
+        await app.restore()
+        var observedAuthenticated = false
+        store.onToken = { if case .authenticated = app.state { observedAuthenticated = true } }
+        await app.restore()
+        XCTAssertTrue(observedAuthenticated, "Foreground validation must retain the view carrying a pending camera photo/draft")
+        store.onToken = nil
     }
 
     func testAbsentSessionNeverCallsAPI() async throws {

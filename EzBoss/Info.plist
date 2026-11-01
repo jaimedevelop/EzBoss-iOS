@@ -11,7 +11,7 @@
 	<key>Auth0Domain</key>
 	<string>$(AUTH0_DOMAIN)</string>
 	<key>CFBundleDisplayName</key>
-	<string>EzBoss</string>
+	<string>$(EZBOSS_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -31,7 +31,7 @@
 			<array>
 				<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
 			</array>
-		</dict>
+</dict>
 	</array>
 	<key>CFBundleVersion</key>
 	<string>$(CURRENT_PROJECT_VERSION)</string>
@@ -39,8 +39,9 @@
 	<dict>
 		<key>UIApplicationSupportsMultipleScenes</key>
 		<false/>
-	</dict>
+</dict>
 	<key>UILaunchScreen</key>
 	<dict/>
+<key>NSCameraUsageDescription</key><string>Take private photos for your assigned work-order tasks.</string>
 </dict>
 </plist>

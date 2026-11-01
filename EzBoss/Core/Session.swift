@@ -39,6 +39,7 @@ final class Session: ObservableObject {
     func signIn() async {
         guard !busy, configuration != nil, let manager else { return }
         busy = true
+        resourceGeneration = UUID()
         state = .connecting
         notice = nil
         defer { busy = false }
@@ -67,7 +68,9 @@ final class Session: ObservableObject {
             return
         }
         busy = true
-        state = .connecting
+        resourceGeneration = UUID()
+        if case .authenticated = state { /* Keep drafts and camera state during validation. */ }
+        else { state = .connecting }
         defer { busy = false }
         await loadIdentity()
     }
@@ -95,9 +98,44 @@ final class Session: ObservableObject {
         }
     }
 
+    // Results belong to the authenticated generation that started them. Revalidation,
+    // logout and account switching cannot deliver an old response into a new shell.
+    private var resourceGeneration = UUID()
+    func business<T>(_ operation: (APIClient, String) async throws -> T) async throws -> T {
+        guard case .authenticated = state, let manager, let api else { throw APIError.expiredSession }
+        guard !busy else { throw APIError.unavailable }
+        let generation = resourceGeneration
+        do {
+            let token: String
+            do { token = try await manager.accessToken() }
+            catch is CancellationError { throw CancellationError() }
+            catch {
+                guard generation == resourceGeneration else { throw CancellationError() }
+                _ = manager.clear()
+                resourceGeneration = UUID()
+                state = .failed("Your session could not be restored. Please sign in again.", requiresSignIn: true)
+                throw APIError.expiredSession
+            }
+            guard generation == resourceGeneration, case .authenticated = state else { throw CancellationError() }
+            let result = try await operation(api, token)
+            try Task.checkCancellation()
+            guard generation == resourceGeneration, case .authenticated = state else { throw CancellationError() }
+            return result
+        } catch {
+            guard generation == resourceGeneration else { throw CancellationError() }
+            if error as? APIError == .expiredSession {
+                _ = manager.clear()
+                resourceGeneration = UUID()
+                state = .failed(APIError.expiredSession.message, requiresSignIn: true)
+            }
+            throw error
+        }
+    }
+
     func signOut() async {
         guard !busy, configuration != nil, let manager else { return }
         busy = true
+        resourceGeneration = UUID()
         locallySignedOut = true
         state = .signedOut
         notice = nil

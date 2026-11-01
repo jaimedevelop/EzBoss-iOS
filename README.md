@@ -146,3 +146,47 @@ that exact service/account after an unsuccessful SDK deletion: only Keychain
 Keychain access error still blocks account switching. Host regression tests and
 a signed device build pass; retry sign-in on the installed update for phone acceptance.
 See `../docs/launch/OCTOBER_27_IOS_AUTH0_SETUP.md` for the setup and verification record.
+
+
+### October 29: company dashboard and document browsing
+
+The authenticated app now discovers `/account/me`, requires explicit selection for
+ambiguous company memberships, and scopes document requests with
+`X-Company-Membership-Id`. The dashboard links to paginated estimate/invoice lists,
+customer search and read-only detail, with retry/empty/denied states and refresh.
+Company switching recreates navigation; session changes reject late API results.
+Missing amounts and currency remain explicit rather than defaulting to zero/USD.
+Accounting, personnel, work orders and charts remain unavailable in this increment.
+
+The Mac core suite now has 29 passing cases and the unsigned simulator-target app
+build passes. No simulator was started. These checks do not establish device,
+Auth0 or staging acceptance. Current evidence and live gates supersede the older
+bootstrap-only descriptions above: `../docs/launch/OCTOBER_29_NATIVE_DOCUMENTS.md`.
+
+### Isolated staging build
+
+Use `Config/Staging.xcconfig.example` as the public configuration template and
+pass the completed file using Xcode's `-xcconfig` option. It selects the separate
+Railway staging API/audience and `local.ezboss.development.staging`, labelled
+**EzBoss Staging**, keeping the demo app and Keychain namespace separate. Configure
+a new Native Auth0 application with callback
+`local.ezboss.development.staging://AUTH0_DOMAIN/ios/local.ezboss.development.staging/callback`.
+The staging client ID and device signing/acceptance remain required; no production
+client ID is used as a fallback in this template.
+
+## Week 3 operational increment (2026-10-31)
+
+`BusinessViews.swift` now exposes native inventory, collections/imports, AI review/save,
+purchasing and owner/assigned work orders with attendance and private task photos.
+`Core/Business.swift` retains typed references and operational requests; provider keys
+are screen-local. Custom HTTPS provider requests originate on the device without an
+EzBoss access token. Foreground validation preserves draft/camera state while blocking
+writes. `Info.plist` includes the camera purpose string. Signed adjustment lines retain
+negative discounts; ordinary negative manual prices remain rejected by the API.
+
+Final host suite: 41 passed. The signed **staging** device build passes and is installed
+on the paired iPhone; simulator-SDK compilation passes without booting a simulator.
+These are build/installation checks, not interactive login, camera/provider or hardware
+workflow acceptance. See [the Week 3 report](../docs/launch/NOVEMBER_09_15_W3_IMPLEMENTATION.md)
+for evidence, open gates and the manual protocol. Existing advanced web controls still
+need an explicit parity/gap inventory during live testing; no platform scope was cut.

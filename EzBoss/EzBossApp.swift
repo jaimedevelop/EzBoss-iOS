@@ -64,7 +64,7 @@ struct EzBossApp: App {
             Group {
                 switch session.state {
                 case .authenticated(let identity):
-                    AuthenticatedShell(session: session, identity: identity).id(identity.id)
+                    BusinessHome(session: session, identity: identity).id(identity.id).disabled(session.busy)
                 default:
                     SignInView(session: session)
                 }
@@ -114,47 +114,6 @@ private struct SignInView: View {
         case .failed(let message, _): return message
         case .connecting: return "Connecting to your account…"
         default: return "Sign in to access your EzBoss account."
-        }
-    }
-}
-
-private enum AccountRoute: Hashable { case account }
-
-private struct AuthenticatedShell: View {
-    @ObservedObject var session: Session
-    let identity: Identity
-
-    var body: some View {
-        NavigationStack {
-            List {
-                Section {
-                    Text("Welcome, \(identity.displayName ?? "User")").font(.title2.bold())
-                    Text("Your EzBoss account is connected.")
-                }
-                Section("Account") {
-                    NavigationLink("Account access", value: AccountRoute.account)
-                }
-            }
-            .navigationTitle("Home")
-            .navigationDestination(for: AccountRoute.self) { _ in
-                Form {
-                    Section("Signed-in account") {
-                        LabeledContent("Name", value: identity.displayName ?? "Not provided")
-                        LabeledContent("Role", value: identity.roleName ?? "Not assigned")
-                        LabeledContent("Status", value: identity.status)
-                    }
-                    Section {
-                        Button("Refresh account access") { Task { await session.restore() } }
-                        Button("Sign out", role: .destructive) { Task { await session.signOut() } }
-                    }
-                }
-                .navigationTitle("Account access")
-            }
-            .toolbar {
-                ToolbarItem(placement: .topBarTrailing) {
-                    Button("Sign out") { Task { await session.signOut() } }
-                }
-            }
         }
     }
 }
