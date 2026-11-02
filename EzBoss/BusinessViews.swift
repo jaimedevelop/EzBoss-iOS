@@ -57,10 +57,64 @@ struct BusinessHome: View {
                         }
                         NavigationLink("Account requests and terms") { NativeAccountLifecycle(session:session,membership:"") }
                         Button("Sign out", role: .destructive) { Task { await session.signOut() } }
-                    }.navigationTitle("EzBoss")
+                    }.workspaceSurface().navigationTitle("EzBoss")
                 }
             }
         }.task { await model.load(session) }
+    }
+}
+
+// Semantic tokens shared by every authenticated native surface.
+enum WorkspaceDesign {
+    static let primary = Color(red: 194/255, green: 65/255, blue: 12/255)
+    static let orange = Color(red: 234/255, green: 88/255, blue: 12/255)
+    static let canvas = Color(red: 249/255, green: 250/255, blue: 251/255)
+    static let navy = Color(red: 15/255, green: 23/255, blue: 42/255)
+    static let raised = Color(red: 30/255, green: 41/255, blue: 59/255)
+    static func accent(_ category: String) -> Color {
+        switch category {
+        case "labor": return Color(red: 126/255, green: 34/255, blue: 206/255)
+        case "tools": return Color(red: 29/255, green: 78/255, blue: 216/255)
+        case "equipment": return Color(red: 21/255, green: 128/255, blue: 61/255)
+        default: return primary
+        }
+    }
+}
+
+private struct WorkspaceHeader: View {
+    let title: String
+    let subtitle: String
+    var accent: Color = WorkspaceDesign.primary
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(title).font(.largeTitle.bold())
+            Text(subtitle).font(.body)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading).padding(16)
+        .foregroundStyle(.white)
+        .background(LinearGradient(colors: [accent, accent.opacity(0.92)], startPoint: .leading, endPoint: .trailing))
+        .clipShape(RoundedRectangle(cornerRadius: 12))
+        .accessibilityElement(children: .combine)
+    }
+}
+
+private enum WorkspacePage: String, CaseIterable, Identifiable {
+    case dashboard = "Dashboard", estimates = "Estimates", projects = "Projects", inventory = "Inventory"
+    case collections = "Collections", workOrders = "Work Orders", finances = "Finances", purchasing = "Purchasing", people = "People", settings = "Settings"
+    var id: String { rawValue }
+    var icon: String {
+        switch self {
+        case .dashboard: return "square.grid.2x2"
+        case .estimates: return "doc.text"
+        case .projects: return "building.2"
+        case .inventory: return "shippingbox"
+        case .collections: return "square.stack"
+        case .workOrders: return "checklist"
+        case .finances: return "dollarsign.circle"
+        case .purchasing: return "cart"
+        case .people: return "person.2"
+        case .settings: return "gearshape"
+        }
     }
 }
 
@@ -70,46 +124,286 @@ private struct CompanyHome: View {
     let membership: String
     let memberships: [CompanyMembership]
     let select: (String) -> Void
+    @State private var page: WorkspacePage = .dashboard
+    @State private var drawer = false
+    @State private var allowedPages: Set<String> = []
+    @State private var accessError: String?
+    @State private var accessLoaded = false
+    @State private var path = NavigationPath()
+    @AccessibilityFocusState private var menuFocused: Bool
+    @Environment(\.dynamicTypeSize) private var textSize
+    private var company: String { memberships.first { $0.id == membership }?.companyName ?? "Company" }
     var body: some View {
-        NavigationStack {
+        ZStack(alignment: .leading) {
+            NavigationStack(path: $path) {
+                Group {
+                    if !accessLoaded { ProgressView("Loading workspace access…") }
+                    else if canOpen(page) { destination }
+                    else {
+                        VStack(spacing: 16) {
+                            Text(accessError ?? "This page is unavailable for your account.")
+                            Button("Retry workspace access") { Task { await loadAccess() } }
+                        }.padding(24)
+                    }
+                }
+                    .toolbar {
+                        ToolbarItem(placement: .topBarLeading) {
+                            Button { drawer = true } label: { Image(systemName: "line.3.horizontal").frame(minWidth: 44, minHeight: 44) }
+                                .accessibilityLabel("Open navigation").accessibilityFocused($menuFocused)
+                        }
+                        ToolbarItem(placement: .principal) { Text(company).font(.headline).lineLimit(1) }
+                    }
+            }.accessibilityHidden(drawer)
+            if drawer {
+                GeometryReader { geometry in
+                    ZStack(alignment: .leading) {
+                        Color.black.opacity(0.45).ignoresSafeArea().onTapGesture { dismissDrawer() }
+                            .accessibilityLabel("Dismiss navigation").accessibilityAddTraits(.isButton)
+                        VStack(alignment: .leading, spacing: 16) {
+                            HStack {
+                                VStack(alignment: .leading) {
+                                    Text(identity.displayName ?? "EzBoss").font(.headline)
+                                    Text(company).font(.subheadline)
+                                    Text(identity.roleName ?? "Account").font(.caption)
+                                }
+                                Spacer()
+                                Button { dismissDrawer() } label: { Image(systemName: "xmark").frame(width: 44, height: 44) }.accessibilityLabel("Close navigation")
+                            }.padding(16).background(WorkspaceDesign.raised).clipShape(RoundedRectangle(cornerRadius: 12))
+                            ScrollView {
+                                VStack(spacing: 4) {
+                                    ForEach(WorkspacePage.allCases.filter { $0 != .settings && canOpen($0) }) { item in drawerRow(item) }
+                                }
+                            }
+                            Menu("Switch company") {
+                                ForEach(memberships.filter(\.available)) { item in
+                                    Button(item.companyName ?? "Company") { dismissDrawer(); select(item.id) }
+                                }
+                            }.frame(minHeight: 44)
+                            drawerRow(.settings)
+                            Button("Sign Out", role: .destructive) { Task { await session.signOut() } }.frame(minHeight: 44)
+                        }
+                        .padding(16).frame(width: min(320, geometry.size.width * 0.86), height: geometry.size.height)
+                        .background(WorkspaceDesign.navy).foregroundStyle(.white)
+                        .accessibilityAddTraits(.isModal)
+                    }
+                }
+            }
+        }
+        .tint(WorkspaceDesign.primary)
+        .environment(\.defaultMinListRowHeight, 48)
+        .task { await loadAccess() }
+    }
+    private func canOpen(_ item: WorkspacePage) -> Bool {
+        if item == .settings { return true }
+        if item == .people { return allowedPages.contains("clients") || allowedPages.contains("employees") }
+        return allowedPages.contains(item == .workOrders ? "work-orders" : item == .finances ? "finances" : item.rawValue.lowercased())
+    }
+    private func loadAccess() async {
+        accessLoaded = false; accessError = nil; allowedPages = []
+        defer { accessLoaded = true }
+        do {
+            let result = try await session.business { api, token in try await api.operation("account/me?membershipId=\(membership)", token: token, membership: membership) }
+            guard let account = result as? [String: Any], let effective = account["effectivePermissions"] as? [String: Any], let pages = effective["pages"] as? [String: [String: Any]] else { throw APIError.invalidResponse }
+            allowedPages = Set(pages.filter { $0.value["allowed"] as? Bool == true }.map(\.key))
+            let capabilities = effective["capabilities"] as? [String: [String: Any]] ?? [:]
+            for key in ["inventory", "collections", "purchasing"] where capabilities["read:\(key)"]?["allowed"] as? Bool != true { allowedPages.remove(key) }
+            if !["inventory-products", "inventory-tools", "inventory-equipment"].allSatisfy(allowedPages.contains) || capabilities["read:inventory"]?["allowed"] as? Bool != true { allowedPages.remove("purchasing") }
+            if !canOpen(page), let first = WorkspacePage.allCases.first(where: canOpen) { page = first }
+        } catch { accessError = "Workspace access could not be loaded. Retry or open Settings for account requests." }
+    }
+    private func dismissDrawer() { drawer = false; menuFocused = true }
+    private func drawerRow(_ item: WorkspacePage) -> some View {
+        Button { page = item; path = NavigationPath(); dismissDrawer() } label: {
+            Label(item.rawValue, systemImage: item.icon).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(.horizontal, 12)
+        }
+        .buttonStyle(.plain)
+        .background(page == item ? WorkspaceDesign.primary : .clear)
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .accessibilityAddTraits(page == item ? .isSelected : [])
+    }
+    @ViewBuilder private var destination: some View {
+        switch page {
+        case .dashboard: dashboard
+        case .estimates: DocumentBrowser(session: session, membership: membership, initialKind: "")
+        case .projects: NativeBusinessRecords(session: session, membership: membership, project: true)
+        case .finances: NativeBusinessRecords(session: session, membership: membership, project: false)
+        case .inventory: inventory
+        case .collections: OperationalBrowser(session: session, membership: membership, module: .collections)
+        case .workOrders: OperationalBrowser(session: session, membership: membership, module: .workOrders)
+        case .purchasing: OperationalBrowser(session: session, membership: membership, module: .purchasing)
+        case .people: NativePeopleSettings(session: session, membership: membership, settings: false)
+        case .settings:
             List {
-                Section {
-                    Text("Welcome, \(identity.displayName ?? "User")").font(.title2.bold())
-                    Text(memberships.first { $0.id == membership }?.companyName ?? "Company")
-                    Menu("Switch company") {
-                        ForEach(memberships.filter(\.available)) { company in
-                            Button(company.companyName ?? "Company") { select(company.id) }
+                NavigationLink("Profile and preferences") { NativePeopleSettings(session: session, membership: membership, settings: true) }
+                NavigationLink("Company invitations") { NativeInvitations(session: session, membership: membership) }
+                NavigationLink("Account requests and terms") { NativeAccountLifecycle(session: session, membership: membership) }
+                Button("Refresh account access") { Task { await session.restore() } }
+            }.workspaceSurface().navigationTitle("Settings")
+        }
+    }
+    private var dashboard: some View {
+        List {
+            WorkspaceHeader(title: "Welcome back, \(identity.displayName?.split(separator: " ").first.map(String.init) ?? "User")!", subtitle: Date.now.formatted(date: .complete, time: .omitted))
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+            Section {
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: textSize.isAccessibilitySize ? 280 : 145), spacing: 12)], spacing: 12) {
+                    ForEach([WorkspacePage.estimates, .projects, .workOrders, .finances].filter(canOpen)) { item in
+                        Button { page = item } label: { shortcut(item.rawValue, icon: item.icon, accent: WorkspaceDesign.primary) }
+                    }
+                }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+            }
+            if canOpen(.estimates) { Section("Recent Documents") {
+                DocumentResults(session: session, membership: membership, search: "", kind: nil, dashboard: true)
+            }
+            }
+            if canOpen(.estimates) { Section("Business documents") {
+                NavigationLink("Create estimate draft") { DraftEditorView(session: session, membership: membership, id: nil) }
+                NavigationLink("Invoices") { DocumentBrowser(session: session, membership: membership, initialKind: "invoice") }
+            }
+            }
+            if canOpen(.workOrders) { NativeDashboardPanel(session: session, membership: membership, kind: "schedule") }
+            if canOpen(.finances) {
+                NativeDashboardPanel(session: session, membership: membership, kind: "pending")
+                NativeDashboardPanel(session: session, membership: membership, kind: "accumulated")
+            }
+            if allowedPages.contains("employees") { NativeDashboardPanel(session: session, membership: membership, kind: "personnel") }
+            if canOpen(.workOrders) { Section("Field work") {
+                NavigationLink("My assigned jobs") { OperationalBrowser(session: session, membership: membership, module: .assignedJobs) }
+            }
+            }
+        }.workspaceSurface().navigationTitle("Dashboard")
+    }
+    private var inventory: some View {
+        ScrollView {
+            VStack(spacing: 24) {
+                WorkspaceHeader(title: "Inventory", subtitle: "Materials, labor, tools and rentals")
+                LazyVGrid(columns: [GridItem(.adaptive(minimum: textSize.isAccessibilitySize ? 280 : 145), spacing: 12)], spacing: 12) {
+                    ForEach(OperationalModule.allCases.filter { $0.inventory && allowedPages.contains("inventory-" + $0.rawValue) }) { module in
+                        NavigationLink { OperationalBrowser(session: session, membership: membership, module: module) } label: {
+                            shortcut(module == .equipment ? "Equipment & Rentals" : module.title, icon: module == .labor ? "person" : module == .tools ? "wrench" : module == .equipment ? "truck.box" : "shippingbox", accent: WorkspaceDesign.accent(module.rawValue))
                         }
                     }
                 }
-                Section("Business documents") {
-                    NavigationLink("Create estimate draft") { DraftEditorView(session: session, membership: membership, id: nil) }
-                    NavigationLink("Estimates") { DocumentBrowser(session: session, membership: membership, initialKind: "estimate") }
-                    NavigationLink("Invoices") { DocumentBrowser(session: session, membership: membership, initialKind: "invoice") }
-                    NavigationLink("All documents") { DocumentBrowser(session: session, membership: membership, initialKind: "") }
+            }.padding(16)
+        }.background(WorkspaceDesign.canvas).workspaceSurface().navigationTitle("Inventory")
+    }
+    private func shortcut(_ title: String, icon: String, accent: Color) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Image(systemName: icon).font(.title)
+            Text(title).font(.headline).fixedSize(horizontal: false, vertical: true)
+        }.frame(maxWidth: .infinity, minHeight: 120, alignment: .leading).padding(16)
+            .aspectRatio(textSize.isAccessibilitySize ? nil : 1, contentMode: .fit)
+            .foregroundStyle(.white).background(LinearGradient(colors: [accent, accent.opacity(0.92)], startPoint: .topLeading, endPoint: .bottomTrailing))
+            .clipShape(RoundedRectangle(cornerRadius: 12))
+    }
+}
+
+private extension View {
+    func workspaceSurface() -> some View {
+        self.scrollContentBackground(.hidden).background(WorkspaceDesign.canvas).tint(WorkspaceDesign.primary)
+    }
+}
+
+/// Independent requests preserve the other dashboard modules when one is unavailable.
+private struct NativeDashboardPanel: View {
+    @ObservedObject var session: Session
+    let membership: String
+    let kind: String
+    @State private var period = "Daily"
+    @State private var data: [String: Any]?
+    @State private var jobs: [OperationRow] = []
+    @State private var error: String?
+    @State private var loading = false
+    private var title: String {
+        switch kind { case "schedule": return "Schedule"; case "pending": return "Pending Accounts"; case "accumulated": return "Your Accumulated"; default: return "Personnel" }
+    }
+    var body: some View {
+        Section {
+            if kind != "schedule" {
+                Picker("Period", selection: $period) {
+                    ForEach(["Daily", "Weekly", "Monthly"], id: \.self) { Text($0) }
                 }
-                Section("Recent documents") {
-                    DocumentResults(session: session, membership: membership, search: "", kind: nil, dashboard: true)
-                }
-                Section("Operations") {
-                    NavigationLink("Projects") { NativeBusinessRecords(session:session,membership:membership,project:true) }
-                    NavigationLink("Finance") { NativeBusinessRecords(session:session,membership:membership,project:false) }
-                    NavigationLink("AI collection assistant") { NativeAICollectionView(session:session,membership:membership) }
-                    ForEach(OperationalModule.allCases) { module in
-                        NavigationLink(module.title) { OperationalBrowser(session: session, membership: membership, module: module) }
+            }
+            if loading { ProgressView("Loading \(title.lowercased())…") }
+            if let error { Text(error).foregroundStyle(.secondary); Button("Retry \(title.lowercased())") { Task { await load() } } }
+            if kind == "schedule" && error == nil && !loading {
+                Text("Open work orders").font(.headline)
+                ForEach(jobs) { row in
+                    NavigationLink { OperationalDetail(session: session, membership: membership, module: .workOrders, id: row.id) } label: {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(row.title).font(.headline)
+                            Text([row.text("customerName"), row.text("serviceAddress"), row.text("status")].filter { !$0.isEmpty }.joined(separator: " · "))
+                                .font(.subheadline).foregroundStyle(.secondary)
+                        }
                     }
                 }
-                Section("Account") {
-                    NavigationLink("Account requests and terms") { NativeAccountLifecycle(session: session, membership: membership) }
-                    NavigationLink("Company invitations") { NativeInvitations(session:session,membership:membership) }
-                    NavigationLink("People") { NativePeopleSettings(session: session, membership: membership, settings: false) }
-                    NavigationLink("Profile and preferences") { NativePeopleSettings(session: session, membership: membership, settings: true) }
-                    LabeledContent("Role", value: identity.roleName ?? "Not assigned")
-                    Button("Refresh account access") { Task { await session.restore() } }
-                    Button("Sign out", role: .destructive) { Task { await session.signOut() } }
+                if jobs.isEmpty { Text("No open work orders.") }
+                Text("Calendar scheduling is available in job management.").font(.caption).foregroundStyle(.secondary)
+            }
+            if let data {
+                if kind == "pending" {
+                    let clients = data["clients"] as? [[String: Any]] ?? []
+                    if clients.isEmpty { Text("No collectible balances for this period.") }
+                    ForEach(Array(clients.enumerated()), id: \.offset) { _, client in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(client["name"] as? String ?? "Client").font(.headline)
+                            metric("Due this period", value: client["dated"], currency: data["currency"] as? String)
+                            metric("Undated / unallocated", value: client["undated"], currency: data["currency"] as? String)
+                        }
+                    }
+                } else if kind == "accumulated" {
+                    metric("Revenue · gross approved receipts", value: data["revenue"], currency: data["currency"] as? String)
+                    metric("Recorded costs", value: data["costs"], currency: data["currency"] as? String)
+                    metric("Profit", value: data["profit"], currency: data["currency"] as? String)
+                } else if kind == "personnel" {
+                    let workers = data["workers"] as? [[String: Any]] ?? []
+                    if workers.isEmpty { Text("No employees or work-order workers found.") }
+                    ForEach(Array(workers.enumerated()), id: \.offset) { _, worker in
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text(worker["name"] as? String ?? "Worker").font(.headline)
+                            let metrics = worker["metrics"] as? [String: Any] ?? [:]
+                            ForEach(["attendance", "late", "excused", "noCallNoShow", "tasksCompleted", "index"], id: \.self) { key in
+                                LabeledContent(key.replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression).capitalized,
+                                    value: (metrics[key] as? NSNumber).map { "\(Int($0.doubleValue.rounded()))%" } ?? "Unavailable")
+                            }
+                        }
+                    }
                 }
-            }.navigationTitle("Dashboard")
+                if let explanation = data["explanation"] as? String { Text(explanation).font(.caption).foregroundStyle(.secondary) }
+            }
+        } header: {
+            HStack {
+                if kind != "personnel" {
+                    VStack(spacing: 2) { ForEach(0..<4) { _ in Rectangle().fill(WorkspaceDesign.orange).frame(width: 4, height: 4) } }
+                }
+                Text(title).font(.headline)
+            }.textCase(nil)
+                .foregroundStyle(kind == "personnel" ? .white : WorkspaceDesign.primary)
+                .padding(kind == "personnel" ? 12 : 0)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(kind == "personnel" ? WorkspaceDesign.primary : .clear)
         }
+        .task(id: period) { await load() }
+    }
+    private func metric(_ title: String, value: Any?, currency: String?) -> some View {
+        let decimal = value.flatMap { $0 is NSNull ? nil : Decimal(string: String(describing: $0), locale: Locale(identifier: "en_US_POSIX")) }
+        return LabeledContent(title, value: decimal.map { $0.formatted(.currency(code: currency ?? "USD")) } ?? "Unavailable").monospacedDigit()
+    }
+    private func load() async {
+        loading = true; error = nil; data = nil; jobs = []
+        defer { loading = false }
+        do {
+            let zone = TimeZone.current.identifier.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? "UTC"
+            let path = kind == "schedule" ? "work-orders" : kind == "personnel" ? "dashboard-personnel?period=\(period.lowercased())" : "dashboard-accounting/\(kind)?period=\(period)&timezone=\(zone)"
+            let result = try await session.business { api, token in try await api.operation(path, token: token, membership: membership) }
+            if kind == "schedule" {
+                jobs = try APIClient.operationRows(result).filter { !["completed", "cancelled", "canceled"].contains($0.text("status")) }
+            } else {
+                guard let object = result as? [String: Any] else { throw APIError.invalidResponse }
+                data = object
+            }
+        } catch is CancellationError { }
+        catch { self.error = (error as? APIError)?.message ?? "This section is unavailable. Check your connection and retry." }
     }
 }
 
@@ -125,6 +419,8 @@ private struct DocumentBrowser: View {
     }
     var body: some View {
         List {
+            WorkspaceHeader(title: "Estimates & Invoices", subtitle: "Manage your business documents")
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
             Picker("Document type", selection: $kind) {
                 Text("All").tag(""); Text("Estimate").tag("estimate"); Text("Draft").tag("draft")
                 Text("Invoice").tag("invoice"); Text("Change order").tag("change-order")
@@ -132,7 +428,7 @@ private struct DocumentBrowser: View {
             DocumentResults(session: session, membership: membership, search: search, kind: kind.isEmpty ? nil : kind, dashboard: false)
         }
         .searchable(text: $search, prompt: "Customer name")
-        .navigationTitle("Documents")
+        .workspaceSurface().navigationTitle("Documents")
     }
 }
 
@@ -185,10 +481,16 @@ private struct DocumentResults: View {
                     DocumentDetail(session: session, membership: membership, id: document.id)
                 } label: {
                     VStack(alignment: .leading, spacing: 5) {
-                        Text(document.number).font(.headline)
-                        Text(document.customerName ?? "Customer")
-                        Text("\(document.estimateState.capitalized) · \(document.clientState ?? "Not sent")").font(.caption).foregroundStyle(.secondary)
-                        Text(amount(document.total))
+                        HStack(alignment: .firstTextBaseline) {
+                            Text(document.number).font(.headline)
+                            Spacer()
+                            Text(amount(document.total)).font(.headline).monospacedDigit()
+                        }
+                        Text(document.customerName ?? "Customer").font(.body)
+                        Text("\(document.estimateState.capitalized) · \(document.clientState ?? "Not sent")")
+                            .font(.subheadline).foregroundStyle(WorkspaceDesign.primary)
+                            .padding(.horizontal, 10).padding(.vertical, 4)
+                            .background(WorkspaceDesign.orange.opacity(0.1)).clipShape(Capsule())
                     }
                 }
             }
@@ -224,6 +526,8 @@ private struct DocumentDetail: View {
             if loading { ProgressView("Loading document…") }
             if let error { Text(error); Button("Retry") { Task { await load() } } }
             if let document {
+                WorkspaceHeader(title: document.number, subtitle: "\(document.estimateState.capitalized) · \(amount(document.total))")
+                    .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
                 Section(document.number) {
                     if !loading {
                         NavigationLink("Edit document") { DraftEditorView(session: session, membership: membership, id: document.id) }
@@ -276,7 +580,7 @@ private struct DocumentDetail: View {
                     Text("Amounts use the document's stored numeric values. Currency is not supplied by this document contract.").font(.caption).foregroundStyle(.secondary)
                 }
             }
-        }.navigationTitle(document?.number ?? "Document")
+        }.workspaceSurface().navigationTitle(document?.number ?? "Document")
             .confirmationDialog("Revoke all existing customer links?", isPresented: $revokeWarning) {
                 Button("Revoke links", role: .destructive) { Task { await act("revoke-links") } }
             }
@@ -363,7 +667,7 @@ private struct DraftEditorView: View {
                 draft.select(customer, contact: contact); saved = false; showCustomers = false
             }
         }
-        .navigationTitle(id == nil ? "Estimate draft" : "Edit document")
+        .workspaceSurface().navigationTitle(id == nil ? "Estimate draft" : "Edit document")
         .onChange(of: draft.customer) { _, _ in saved = false }
         .confirmationDialog("Discard local edits and reload?", isPresented: $reloadWarning) {
             Button("Discard edits and reload", role: .destructive) { Task { await load() } }
@@ -415,7 +719,7 @@ private struct CustomerPicker: View {
                 if !busy && rows.isEmpty { Text("No matching clients.") }
                 Button("Search / retry") { Task { await load(reset: true) } }.disabled(busy)
                 if more { Button("Load more") { Task { await load(reset: false) } }.disabled(busy) }
-            }.navigationTitle("Select client")
+            }.workspaceSurface().navigationTitle("Select client")
              .searchable(text: $search)
              .task { await load(reset: true) }
         }
@@ -468,6 +772,11 @@ private struct OperationalBrowser: View {
     @State private var more = false
     var body: some View {
         List {
+            WorkspaceHeader(title: module.title, subtitle: module.inventory ? "Inventory and pricing" : "Manage your company records", accent: WorkspaceDesign.accent(module.rawValue))
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+            if module == .collections {
+                NavigationLink("AI collection assistant") { NativeAICollectionView(session: session, membership: membership) }
+            }
             if loading { ProgressView("Loading…") }
             if let error { Text(error).foregroundStyle(.red); Button("Retry") { Task { await load() } } }
             if rows.isEmpty && !loading && error == nil { Text("No items in this company.") }
@@ -483,7 +792,7 @@ private struct OperationalBrowser: View {
                 }
             }
         }
-        .navigationTitle(module.title).searchable(text: $search)
+        .workspaceSurface().navigationTitle(module.title).searchable(text: $search)
         .toolbar {
             if module.inventory || module == .collections || module == .purchasing {
                 Button("Create") { creating = true }
@@ -558,7 +867,7 @@ private struct OperationalEditor: View {
             Button("Save") { Task { await save() } }.disabled(busy)
             if busy { ProgressView("Waiting for confirmation…") }
         }
-        .navigationTitle(row == nil ? "Create \(module.title)" : "Edit \(module.title)")
+        .workspaceSurface().navigationTitle(row == nil ? "Create \(module.title)" : "Edit \(module.title)")
         .toolbar { Button("Cancel") { dismiss() }.disabled(busy) }
         .task {
             name = row?.text("name") ?? ""; description = row?.text("description") ?? ""
@@ -699,7 +1008,7 @@ private struct OperationalDetail: View {
                 }
             }
         }
-        .disabled(busy).navigationTitle(module.title)
+        .disabled(busy).workspaceSurface().navigationTitle(module.title)
         .sheet(isPresented:$editing,onDismiss:{ Task { await load() } }) { NavigationStack { OperationalEditor(session:session,membership:membership,module:module,row:row) } }
         .sheet(isPresented:$managing,onDismiss:{ Task { await load() } }) { if let row { NavigationStack { WorkOrderManagement(session:session,membership:membership,order:row) { managing = false } } } }
         .sheet(isPresented:$editingSelection,onDismiss:{ Task { await load() } }) { if let row { NavigationStack { CollectionSelectionEditor(session:session,membership:membership,collection:row) { editingSelection = false } } } }
@@ -829,7 +1138,7 @@ private struct CollectionSelectionEditor: View {
                     done()
                 } catch { self.error = (error as? APIError)?.message ?? "Selection was not confirmed. Reload the collection before retrying." }
             } }.disabled(busy)
-        }.navigationTitle("Collection items")
+        }.workspaceSurface().navigationTitle("Collection items")
          .task(id:kind) {
             selected = ""; rows = []
             do { rows = try await session.business { api,token in try APIClient.operationRows(await api.operation("inventory/\(kind)",token:token,membership:membership)) } }
@@ -870,7 +1179,7 @@ private struct NativeCollectionImportPicker: View {
                     }
                     Button("Refresh / retry") { Task { await load() } }
                 }
-            }.navigationTitle("Import collection").task { await load() }
+            }.workspaceSurface().navigationTitle("Import collection").task { await load() }
         }
     }
     private func load() async {
@@ -917,7 +1226,7 @@ private struct WorkOrderManagement: View {
                     Button("Remove employee from job",role:.destructive) { Task { await command("workers/\(worker.id)",method:"DELETE") } }
                 }
             }
-        }.disabled(busy).navigationTitle("Job management")
+        }.disabled(busy).workspaceSurface().navigationTitle("Job management")
          .toolbar { Button("Done") { done() } }
          .task { await load() }
     }
@@ -1004,7 +1313,7 @@ private struct NativeAICollectionView: View {
                     Button("Save reviewed collection") { Task { await save() } }.disabled(busy)
                 }
             }
-        }.navigationTitle("AI collections")
+        }.workspaceSurface().navigationTitle("AI collections")
          .task { await load() }
          .onChange(of:provider) { _,_ in key = "" }
     }
@@ -1082,6 +1391,8 @@ private struct NativePeopleSettings: View {
     }
     var body: some View {
         Form {
+            WorkspaceHeader(title: settings ? "Settings" : "People", subtitle: settings ? "Profile and company preferences" : "Clients, employees and invitations")
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
             if settings { Toggle("My employee profile",isOn:$employeeProfile).disabled(busy) }
             if !settings { Picker("People",selection:$path) { Text("Clients").tag("clients"); Text("Employees").tag("employees") }.disabled(busy) }
             if busy { ProgressView() }
@@ -1109,7 +1420,7 @@ private struct NativePeopleSettings: View {
                     if rows.isEmpty && !busy && error == nil { Text("No people in this company.") }
                 }
             }
-        }.navigationTitle(settings ? "Profile and preferences" : "People").task(id:endpoint) { await load() }
+        }.workspaceSurface().navigationTitle(settings ? "Profile and preferences" : "People").task(id:endpoint) { await load() }
     }
     private func load() async {
         busy=true;error=nil;rows=[];editing=nil
@@ -1174,7 +1485,7 @@ private struct NativeAccountLifecycle: View {
                 TextField("Type REQUEST DELETION",text:$confirmation).textInputAutocapitalization(.characters)
                 Button("Submit for review",role:.destructive) { Task { await action("account/deletion-requests",["requestId":requestID,"confirmation":confirmation]) } }.disabled(busy || confirmation != "REQUEST DELETION" || data.isEmpty)
             }
-        }.navigationTitle("Account requests").task { await load() }
+        }.workspaceSurface().navigationTitle("Account requests").task { await load() }
     }
     private func load() async {
         busy=true;error=nil;defer{busy=false}
@@ -1212,6 +1523,8 @@ private struct NativeBusinessRecords: View {
     private var fields: [String] { project ? projectKeys+addressKeys : financeKeys }
     var body: some View {
         Form {
+            WorkspaceHeader(title: project ? "Projects" : "Finances", subtitle: project ? "Projects, clients and progress" : "Records and linked payment summaries")
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
             if busy { ProgressView() }
             if let error { Text(error).foregroundStyle(.red) }
             if let message { Text(message) }
@@ -1232,7 +1545,7 @@ private struct NativeBusinessRecords: View {
                 ForEach(rows) {row in Button(project ? row.title : ((row.value["data"] as? [String:Any])?["invoice"] as? String ?? row.id)) {edit(row)} }
                 if rows.isEmpty && !busy && error == nil { Text("No records in this company.") }
             }
-        }.navigationTitle(project ? "Projects" : "Finance").task { await load() }
+        }.workspaceSurface().navigationTitle(project ? "Projects" : "Finance").task { await load() }
     }
     private func edit(_ row: OperationRow) {
         selected=row;message=nil;clientID=row.text("clientId");status=row.text("status").isEmpty ? "planning" : row.text("status")
@@ -1294,7 +1607,7 @@ private struct NativeInvitations: View {
                     Button("Revoke invitation",role:.destructive) { Task { await action("employee-account-invitations/"+row.id+"/revoke",[:]) } }.disabled(busy)
                 }
             }
-        }.navigationTitle("Company invitations").task { await load() }
+        }.workspaceSurface().navigationTitle("Company invitations").task { await load() }
     }
     private func load() async {
         busy=true;error=nil;positions=[];invitations=[];defer{busy=false}
