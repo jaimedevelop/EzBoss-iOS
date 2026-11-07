@@ -19,6 +19,14 @@ final class BusinessTests: XCTestCase {
         XCTAssertEqual(query.first { $0.name == "limit" }?.value, "25")
         XCTAssertEqual(query.first { $0.name == "estimateState" }?.value, "invoice")
     }
+    func testDashboardRequestsOnlyFiveSummaryDocuments() async throws {
+        _ = try await api(200, "[]").documents(accessToken: "synthetic", membership: "m1", search: "", kind: nil, offset: 0, dashboard: true)
+        let request = try XCTUnwrap(StubProtocol.request)
+        let query = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)!.queryItems!
+        XCTAssertEqual(query.first { $0.name == "limit" }?.value, "5")
+        XCTAssertEqual(query.first { $0.name == "summary" }?.value, "true")
+        XCTAssertEqual(request.value(forHTTPHeaderField: "X-Company-Membership-Id"), "m1")
+    }
     func testCompanyAmbiguityDiscoversMembershipsWithoutSelectingFirst() async throws {
         let client = api(409, #"{"memberships":[{"id":"m1","companyName":"One","kind":"owner","isActive":true,"companyIsActive":true},{"id":"m2","kind":"employee","isActive":true,"employeeIsActive":false,"companyIsActive":true}]}"#)
         let result = try await client.companies(accessToken: "synthetic")

@@ -52,7 +52,8 @@ credentials only through the SDK Keychain manager and requests offline access.
 It restores/renews sessions on launch and foreground, fetches `users/me`, displays
 only active accounts, and removes visible identity on access failures. API
 redirects are refused, and response bodies/tokens are never logged or displayed.
-Logout clears local credentials even if browser logout is cancelled. It does not
+Logout clears local credentials without opening a browser. The next sign-in explicitly
+requests authentication even if the browser retains an Auth0 session. It does not
 claim server-side refresh-token revocation or immediate invalidation of already
 issued tokens. Business permissions remain enforced by the API; no company or
 business screen has been accepted yet.
@@ -78,8 +79,7 @@ and foreground revalidation remove the protected stack and its route state.
 Business modules are later increments, and account role display does not grant
 permissions. The reusable API client rejects redirects, uses ephemeral networking
 without cookie/cache persistence, and distinguishes 401, 403, 404, inactive,
-malformed and unavailable account responses. Login and logout explicitly share
-the callback derived from the actual app bundle ID and configured tenant.
+malformed and unavailable account responses. Login uses the callback derived from the actual app bundle ID and configured tenant.
 
 The Swift package compiles the same core source files used by the app. Its tests
 run on the Mac without starting a simulator or calling Auth0/staging:
@@ -190,3 +190,37 @@ These are build/installation checks, not interactive login, camera/provider or h
 workflow acceptance. See [the Week 3 report](../docs/launch/NOVEMBER_09_15_W3_IMPLEMENTATION.md)
 for evidence, open gates and the manual protocol. Existing advanced web controls still
 need an explicit parity/gap inventory during live testing; no platform scope was cut.
+
+## Native welcome redesign — November 4, 2026
+
+The opening screen now shows the bundled EzBoss logo at the top and a bottom
+welcome/action group with Sign In and Create Account. Warm neutrals, navy type,
+orange accents and compact controls match the EzBoss theme. The content scrolls
+on small screens and at enlarged text sizes. Existing loading, account retry,
+notices and failed-session sign-out remain available. Create Account requests
+Auth0's hosted signup screen (`screen_hint=signup`) and then uses the existing
+API identity flow; company provisioning and tenant signup policy are unchanged.
+
+Verification: generic iOS Simulator SDK unsigned build passed, along with 42
+core tests including signup intent forwarding. Logs: `/tmp/ezboss-welcome-ios.log`
+and `/tmp/ezboss-welcome-core.log`. No simulator/emulator was started. Phone visual,
+VoiceOver/Dynamic Type and live hosted signup acceptance remain pending.
+
+The welcome screen follows the web landing hero’s charcoal/orange colors and bold headline, with the logo grouped above the welcome content. Its logo uses the `EzBossLogo` asset catalog image; the loading animation retains its separate PNG. November 4 verification: simulator-target build passed (`/tmp/ezboss-landing-refresh-ios.log`); no simulator launched, and phone visual/accessibility acceptance remains pending.
+
+Create Account also uses an ephemeral authentication browser session so saved
+Safari/Auth0/provider sessions are not reused during registration. The hosted
+signup page remains responsible for email/password registration and enabled
+social providers; no connection is forced. November 4 verification: a public
+authorization request with the configured iOS client and `screen_hint=signup`
+returned the Sign Up page with email registration and Continue with Google.
+All 42 core tests and the unsigned simulator-target build passed
+(`/tmp/ezboss-signup-tests.log`, `/tmp/ezboss-signup-build.log`). No simulator was
+started. Interactive registration on the phone remains to be verified; selecting
+an already registered Google identity can still authenticate that existing user.
+
+## Better Auth migration (opt-in, acceptance pending)
+
+Default configuration retains Auth0. Public `AUTH_PROVIDER = better-auth` and `AUTH_ORIGIN` select the custom SwiftUI credential prototype after shared API migrations/acceptance. Never add server keys to xcconfig. Password/signup/verification-resend/recovery-request/MFA forms share a dedicated Keychain store (`WhenUnlockedThisDeviceOnly`, no synchronization). A complete signed header is validated before storage; passwords/codes/intermediate cookies are transient and service outages preserve credentials.
+
+Google/native OAuth resource-token verification, native company/invitation onboarding, security enrollment and native admin handoff, associated reset links and device acceptance remain pending. The SwiftUI build and host tests do not prove physical-device flows. Keep Auth0 available until these gates and nine-account reconciliation pass.

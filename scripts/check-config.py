@@ -32,8 +32,9 @@ def main():
                 raise ValueError(f"Local.xcconfig:{number}: unsupported public value syntax")
     source = plistlib.loads((ROOT / "EzBoss/Info.plist").read_bytes())
     expected = dict(zip(FIELDS, ("$(AUTH0_DOMAIN)", "$(AUTH0_CLIENT_ID)", "$(AUTH0_AUDIENCE)", "$(API_BASE_URL)")))
+    expected.update({"AuthProvider":"$(AUTH_PROVIDER)","AuthOrigin":"$(AUTH_ORIGIN)"})
     if any(source.get(key) != value for key, value in expected.items()):
-        raise ValueError("Info.plist must reference only the four public build settings")
+        raise ValueError("Info.plist must reference only the approved public build settings")
     for key in source:
         if re.search(r"secret|password|private.?key|access.?token|refresh.?token|management", key, re.I):
             raise ValueError("Server credential field found in Info.plist")
@@ -50,6 +51,19 @@ def main():
     schemes = [scheme for entry in info.get("CFBundleURLTypes", []) for scheme in entry.get("CFBundleURLSchemes", [])]
     if schemes != [bundle] or not re.fullmatch(r"[a-z][a-z0-9-]*(?:\.[a-z0-9-]+)+", bundle):
         raise ValueError("Built callback scheme must exactly match the app bundle identifier")
+    provider = info.get("AuthProvider", "auth0")
+    if provider not in ("auth0", "better-auth"):
+        raise ValueError("Invalid AuthProvider")
+    if provider == "better-auth":
+        for key in ("AuthOrigin", "APIBaseURL"):
+            value = info.get(key, "")
+            url = urlsplit(value)
+            if url.scheme != "https" or not url.hostname or url.username is not None or url.password is not None or "?" in value or "#" in value or (url.port is not None and not 1 <= url.port <= 65535) or (key == "AuthOrigin" and url.path not in ("", "/")):
+                raise ValueError("Invalid public Better Auth topology")
+        if args.require_release_identity and bundle.startswith("local."):
+            raise ValueError("Replace the temporary bundle identifier before distribution")
+        print("PASS: native credential public topology and bundle scheme; provider/device acceptance remains pending")
+        return
     values = [info.get(key, "") for key in FIELDS]
     if not any(values) and not (args.require_config or args.require_release_identity):
         print("PASS: unconfigured bootstrap; callback scheme matches bundle; live sign-in is disabled")

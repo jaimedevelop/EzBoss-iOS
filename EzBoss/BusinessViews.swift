@@ -124,6 +124,7 @@ private struct CompanyHome: View {
     let membership: String
     let memberships: [CompanyMembership]
     let select: (String) -> Void
+    @State private var profileFirstName: String?
     @State private var page: WorkspacePage = .dashboard
     @State private var drawer = false
     @State private var allowedPages: Set<String> = []
@@ -243,12 +244,20 @@ private struct CompanyHome: View {
     }
     private var dashboard: some View {
         List {
-            WorkspaceHeader(title: "Welcome back, \(identity.displayName?.split(separator: " ").first.map(String.init) ?? "User")!", subtitle: Date.now.formatted(date: .complete, time: .omitted))
+            WorkspaceHeader(title: "Welcome back, \(profileFirstName ?? identity.displayName?.split(separator: " ").first.map(String.init) ?? "there")!", subtitle: Date.now.formatted(date: .complete, time: .omitted))
                 .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
             Section {
-                LazyVGrid(columns: [GridItem(.adaptive(minimum: textSize.isAccessibilitySize ? 280 : 145), spacing: 12)], spacing: 12) {
-                    ForEach([WorkspacePage.estimates, .projects, .workOrders, .finances].filter(canOpen)) { item in
-                        Button { page = item } label: { shortcut(item.rawValue, icon: item.icon, accent: WorkspaceDesign.primary) }
+                VStack(spacing: 12) {
+                    ForEach([WorkspacePage.estimates, .workOrders].filter(canOpen)) { item in
+                        Button { page = item } label: {
+                            Label(item.rawValue, systemImage: item.icon)
+                                .font(.title3.weight(.semibold))
+                                .frame(maxWidth: .infinity, minHeight: 64, alignment: .leading)
+                                .padding(.horizontal, 20)
+                                .foregroundStyle(.white)
+                                .background(WorkspaceDesign.primary)
+                                .clipShape(RoundedRectangle(cornerRadius: 12))
+                        }.buttonStyle(.plain)
                     }
                 }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
             }
@@ -271,7 +280,15 @@ private struct CompanyHome: View {
                 NavigationLink("My assigned jobs") { OperationalBrowser(session: session, membership: membership, module: .assignedJobs) }
             }
             }
-        }.workspaceSurface().navigationTitle("Dashboard")
+        }.workspaceSurface().navigationTitle("")
+            .task {
+                do {
+                    let result = try await session.business { api, token in try await api.operation("profile", token: token, membership: membership) }
+                    let name = (result as? [String: Any])?["firstName"] as? String
+                    profileFirstName = name?.trimmingCharacters(in: .whitespacesAndNewlines)
+                    if profileFirstName?.isEmpty == true { profileFirstName = nil }
+                } catch { /* Keep the account name when the profile is unavailable. */ }
+            }
     }
     private var inventory: some View {
         ScrollView {
@@ -440,7 +457,7 @@ private final class DocumentListModel: ObservableObject {
     @Published var more = false
     private var offset = 0
     private var generation = UUID()
-    func load(_ session: Session, membership: String, search: String, kind: String?, reset: Bool) async {
+    func load(_ session: Session, membership: String, search: String, kind: String?, reset: Bool, dashboard: Bool = false) async {
         if !reset && loading { return }
         let request = UUID(); generation = request
         if reset { rows = []; offset = 0; more = false }
@@ -448,14 +465,14 @@ private final class DocumentListModel: ObservableObject {
         defer { if generation == request { loading = false } }
         let next = offset
         do {
-            if reset { try await Task.sleep(for: .milliseconds(250)) }
+            if reset && !dashboard && !search.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
             let page = try await session.business { api, token in
-                try await api.documents(accessToken: token, membership: membership, search: search, kind: kind, offset: next)
+                try await api.documents(accessToken: token, membership: membership, search: search, kind: kind, offset: next, dashboard: dashboard)
             }
             guard generation == request else { return }
             offset = next + page.count
             for row in page where !rows.contains(where: { $0.id == row.id }) { rows.append(row) }
-            more = page.count == 25
+            more = !dashboard && page.count == 25
         } catch is CancellationError { }
         catch {
             guard generation == request else { return }
@@ -504,7 +521,7 @@ private struct DocumentResults: View {
         }
         .task(id: query) { await load(reset: true) }
     }
-    private func load(reset: Bool) async { await model.load(session, membership: membership, search: search, kind: kind, reset: reset) }
+    private func load(reset: Bool) async { await model.load(session, membership: membership, search: search, kind: kind, reset: reset, dashboard: dashboard) }
 }
 
 private struct DocumentDetail: View {
@@ -521,13 +538,40 @@ private struct DocumentDetail: View {
     @State private var actionMessage: String?
     @State private var customerURL: URL?
     @State private var revokeWarning = false
+    @State private var selectedTab = "Estimate"
+    private var tabs: [String] {
+        ["Estimate", "Client View"] + (document?.estimateState == "change-order" ? [] : ["Change Orders"]) + ["Payments", "Timeline", "Communication", "History"]
+    }
     var body: some View {
+        VStack(spacing: 0) {
+            if document != nil {
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 0) {
+                        ForEach(tabs, id: \.self) { tab in
+                            Button { selectedTab = tab } label: {
+                                VStack(spacing: 10) {
+                                    Text(tab == "Estimate" && document?.estimateState == "invoice" ? "Invoice" : tab)
+                                        .font(.subheadline.weight(selectedTab == tab ? .semibold : .regular))
+                                        .padding(.horizontal, 16)
+                                    Rectangle().fill(selectedTab == tab ? WorkspaceDesign.primary : Color.clear).frame(height: 2)
+                                }.padding(.top, 14)
+                            }
+                            .buttonStyle(.plain)
+                            .foregroundStyle(selectedTab == tab ? WorkspaceDesign.primary : Color.secondary)
+                            .accessibilityAddTraits(selectedTab == tab ? .isSelected : [])
+                        }
+                    }
+                }.background(Color.white)
+                Divider()
+            }
+
         List {
             if loading { ProgressView("Loading document…") }
             if let error { Text(error); Button("Retry") { Task { await load() } } }
             if let document {
                 WorkspaceHeader(title: document.number, subtitle: "\(document.estimateState.capitalized) · \(amount(document.total))")
                     .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+                if selectedTab == "Estimate" {
                 Section(document.number) {
                     if !loading {
                         NavigationLink("Edit document") { DraftEditorView(session: session, membership: membership, id: document.id) }
@@ -557,11 +601,6 @@ private struct DocumentDetail: View {
                           .disabled(acting || approver.isEmpty || approvalReason.isEmpty || approvalDate.isEmpty)
                     }
                 }
-                Section("History") {
-                    ForEach(Array((document.revisionsHistory ?? []).enumerated()), id: \.offset) { _, event in
-                        VStack(alignment: .leading) { Text(event.changes); Text("\(event.modifiedByName ?? "Actor recorded") · \(event.date)").font(.caption) }
-                    }
-                }
                 Section("Line items") {
                     ForEach(document.lineItems ?? []) { line in
                         VStack(alignment: .leading) {
@@ -579,13 +618,72 @@ private struct DocumentDetail: View {
                     LabeledContent("Total", value: amount(document.total))
                     Text("Amounts use the document's stored numeric values. Currency is not supplied by this document contract.").font(.caption).foregroundStyle(.secondary)
                 }
+                }
+                if selectedTab == "Client View" {
+                    Section("Client View") {
+                        Text("Open the customer link to view the current customer-facing document.")
+                        Button("Prepare customer link") { Task { await act("share-link") } }.disabled(acting)
+                        if let customerURL { Link("Open customer view", destination: customerURL); ShareLink(item: customerURL) }
+                        if let actionMessage { Text(actionMessage) }
+                    }
+                }
+                if selectedTab == "History" {
+                Section("History") {
+                    ForEach(Array((document.revisionsHistory ?? []).enumerated()), id: \.offset) { _, event in
+                        VStack(alignment: .leading) { Text(event.changes); Text("\(event.modifiedByName ?? "Actor recorded") · \(event.date)").font(.caption) }
+                    }
+                }
+                    if document.revisionsHistory?.isEmpty != false { Text("No revision history yet.").foregroundStyle(.secondary) }
+                }
+                if selectedTab == "Timeline" {
+                    let views = document.customerViews ?? []
+                    Section("Viewed by Customer") {
+                        Label(views.contains { $0.matchesCurrent == true } ? "Current version viewed" : "Current version awaiting a view", systemImage: "eye")
+                            .foregroundStyle(.purple)
+                        if views.isEmpty { Text("No customer views recorded yet.").foregroundStyle(.secondary) }
+                        ForEach(views) { view in
+                            let date = try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(view.viewedAt)
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(date?.formatted(date: .abbreviated, time: .standard) ?? view.viewedAt)
+                                Text(view.matchesCurrent.map { $0 ? "Current version" : "Earlier version" } ?? "Version unavailable")
+                                    .font(.caption).foregroundStyle(.secondary)
+                            }
+                        }
+                    }
+                    Section("Timeline") {
+                        if let date = document.validUntil { LabeledContent("Valid until", value: date) }
+                        Text("Milestone scheduling is available in the web app.").foregroundStyle(.secondary)
+                    }
+                }
+                if ["Change Orders", "Payments", "Communication"].contains(selectedTab) {
+                    Section(selectedTab) {
+                        Text("Manage \(selectedTab.lowercased()) for this document in the web app.").foregroundStyle(.secondary)
+                        if selectedTab == "Payments" {
+                            Button("Prepare customer link / checkout") { Task { await act("share-link") } }.disabled(acting)
+                            if let customerURL { Link("Open customer checkout", destination: customerURL) }
+                            if let actionMessage { Text(actionMessage) }
+                        }
+                    }
+                }
             }
+        }
         }.workspaceSurface().navigationTitle(document?.number ?? "Document")
             .confirmationDialog("Revoke all existing customer links?", isPresented: $revokeWarning) {
                 Button("Revoke links", role: .destructive) { Task { await act("revoke-links") } }
             }
             .task { await load() }
             .refreshable { await load() }
+            .task(id: selectedTab) {
+                guard selectedTab == "Timeline" else { return }
+                while !Task.isCancelled {
+                    if !loading, !acting, let latest = try? await session.business({ api, token in
+                        try await api.document(accessToken: token, membership: membership, id: id)
+                    }), !Task.isCancelled, !loading, !acting {
+                        document = latest
+                    }
+                    do { try await Task.sleep(for: .seconds(10)) } catch { return }
+                }
+            }
             .toolbar { Button("Refresh") { Task { await load() } }.disabled(loading) }
     }
     private func act(_ action: String, body: [String: Any] = [:]) async {
@@ -628,13 +726,31 @@ private struct DraftEditorView: View {
     @State private var reloadWarning = false
     @State private var showCustomers = false
     @State private var importingCollection = false
+    @State private var addingCompanyContact = false
+    @State private var contact: [String: String] = [:]
+    @State private var contactError: String?
+    @State private var contactNotice: String?
     var body: some View {
         Form {
             if let error { Section { Text(error).foregroundStyle(.red) } }
+            if let contactNotice { Text(contactNotice).foregroundStyle(.green) }
             if saved { Text("Saved. Reopen the document to verify totals and approval status.").foregroundStyle(.green) }
             if ready {
                 Section("Customer") {
                     Button("Select saved client or contact") { showCustomers = true }
+                    if draft.canAddCompanyContact {
+                        Button("Add company contact") { contact = [:]; contactError = nil; addingCompanyContact = true }
+                        if !draft.pendingCompanyContacts.isEmpty {
+                            Text("New contacts will be added to the company when you save.").foregroundStyle(.secondary)
+                            ForEach(draft.pendingCompanyContacts.indices, id: \.self) { index in
+                                let entry = draft.pendingCompanyContacts[index]
+                                let name = ["name", "email", "phone", "note"].compactMap { entry[$0] }.first { !$0.isEmpty } ?? "Contact"
+                                Button("Remove new contact: \(name)", role: .destructive) {
+                                    draft.removePendingCompanyContact(at: index)
+                                }
+                            }
+                        }
+                    }
                     TextField("Customer name", text: $draft.customer)
                     TextField("Email (optional)", text: $draft.email).textInputAutocapitalization(.never).keyboardType(.emailAddress)
                     TextField("Scope description", text: $draft.description, axis: .vertical)
@@ -667,12 +783,70 @@ private struct DraftEditorView: View {
                 draft.select(customer, contact: contact); saved = false; showCustomers = false
             }
         }
+        .sheet(isPresented: $addingCompanyContact) {
+            NavigationStack {
+                Form {
+                    if let contactError { Text(contactError).foregroundStyle(.red) }
+                    TextField("Name", text: contactField("name"))
+                    TextField("Phone", text: contactField("phone")).keyboardType(.phonePad)
+                    TextField("Email", text: contactField("email")).keyboardType(.emailAddress).textInputAutocapitalization(.never)
+                    if invalidContactEmail { Text("Enter a valid email address.").foregroundStyle(.red) }
+                    TextField("Note", text: contactField("note"))
+                }
+                .disabled(busy)
+                .interactiveDismissDisabled(busy)
+                .navigationTitle("Add company contact")
+                .toolbar {
+                    ToolbarItem(placement: .cancellationAction) {
+                        Button("Cancel") { addingCompanyContact = false }.disabled(busy)
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button(busy ? "Saving…" : "Add") { Task { await addContact() } }
+                            .disabled(busy || invalidContactEmail || contact.values.allSatisfy { $0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+                    }
+                }
+            }
+        }
+        .task(id: contactNotice) {
+            guard contactNotice != nil else { return }
+            try? await Task.sleep(for: .seconds(5))
+            if !Task.isCancelled { contactNotice = nil }
+        }
         .workspaceSurface().navigationTitle(id == nil ? "Estimate draft" : "Edit document")
         .onChange(of: draft.customer) { _, _ in saved = false }
         .confirmationDialog("Discard local edits and reload?", isPresented: $reloadWarning) {
             Button("Discard edits and reload", role: .destructive) { Task { await load() } }
         }
         .task { if !ready { await load() } }
+    }
+    private func addContact() async {
+        guard let clientID = draft.payload["customerId"] as? String else { return }
+        busy = true
+        contactError = nil
+        defer { busy = false }
+        let newContact = ["name": contact["name"] ?? "", "phone": contact["phone"] ?? "",
+                          "email": contact["email"] ?? "", "note": contact["note"] ?? ""]
+        let additions = draft.pendingCompanyContacts + [newContact]
+        do {
+            let result = try await session.business { api, token in
+                try await api.appendCompanyContacts(accessToken: token, membership: membership,
+                                                    clientID: clientID, contacts: additions)
+            }
+            draft.addCompanyContact(newContact)
+            draft.payload.removeValue(forKey: "companyContactAdditions")
+            contactNotice = result.message
+            saved = false
+            addingCompanyContact = false
+        } catch {
+            contactError = (error as? APIError)?.message ?? "Could not confirm the company contact save. Your details are preserved. Retry to confirm."
+        }
+    }
+    private var invalidContactEmail: Bool {
+        let email = (contact["email"] ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        return !email.isEmpty && email.range(of: #"^[^\s@]+@[^\s@]+\.[^\s@]+$"#, options: .regularExpression) == nil
+    }
+    private func contactField(_ key: String) -> Binding<String> {
+        Binding(get: { contact[key] ?? "" }, set: { contact[key] = $0 })
     }
     private func line(_ index: Int, _ key: String) -> Binding<String> {
         Binding(get: { String(describing: draft.lines[index][key] ?? "") }, set: { draft.lines[index][key] = $0; saved = false })
@@ -690,6 +864,7 @@ private struct DraftEditorView: View {
         do {
             let value = draft
             draft = try await session.business { api, token in try await api.saveDraft(accessToken: token, membership: membership, draft: value) }
+            contactNotice = draft.companyContactNotice
             saved = true
         } catch { self.error = (error as? APIError)?.message ?? "Save was not confirmed. Your edits are preserved. Reopen the document before retrying an uncertain create." }
     }

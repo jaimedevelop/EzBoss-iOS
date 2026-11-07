@@ -7,3 +7,7 @@ EZBOSS_DISPLAY_NAME = EzBoss Staging
 AUTH0_CLIENT_ID = j5AZ1y7unFxXnRKpJaS9cb9emDt5JkpF
 AUTH0_AUDIENCE = https:/$()/api-staging.ezboss.pro
 API_BASE_URL = https:/$()/api-staging-7b72.up.railway.app
+
+// Enable only after the shared API/auth acceptance gates pass.
+// AUTH_PROVIDER = better-auth
+// AUTH_ORIGIN = https:/$()/YOUR_AUTH_ORIGIN

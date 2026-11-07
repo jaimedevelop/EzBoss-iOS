@@ -34,11 +34,13 @@ enum APIError: Error, Equatable {
 
 // One session per API client; never use a global shared cookie/cache store for identity.
 final class APIClient {
+    private let identityDiscovery: Bool
     private let baseURL: URL
     private let transport: URLSession
 
-    init(baseURL: URL, protocolClasses: [AnyClass]? = nil) {
+    init(baseURL: URL, protocolClasses: [AnyClass]? = nil, identityDiscovery: Bool = false) {
         self.baseURL = baseURL
+        self.identityDiscovery = identityDiscovery
         let configuration = URLSessionConfiguration.ephemeral
         configuration.httpCookieStorage = nil
         configuration.urlCache = nil
@@ -75,6 +77,16 @@ final class APIClient {
     }
 
     func currentUser(accessToken: String) async throws -> Identity {
+        if identityDiscovery {
+            let (data,status)=try await resource("account/me",token:accessToken)
+            if status==401 { throw APIError.expiredSession }
+            if status>=500 { throw APIError.unavailable }
+            guard [200,403,409].contains(status) else { throw APIError.invalidResponse }
+            if status==200 {
+                guard let discovery=try? JSONSerialization.jsonObject(with:data) as? [String:Any] else { throw APIError.invalidResponse }
+                if discovery["pendingIdentity"] as? Bool == true { throw APIError.missingAccount }
+            }
+        }
         guard !accessToken.isEmpty else { throw APIError.expiredSession }
         var request = URLRequest(url: baseURL.appendingPathComponent("users/me"))
         request.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")

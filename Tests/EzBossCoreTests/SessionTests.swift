@@ -7,6 +7,11 @@ private final class CredentialStore: SessionCredentialStore {
     var hasSession = true
     var clearSucceeds = true
     var failure: Error?
+    var createAccountRequested = false
+    func login(createAccount: Bool) async throws {
+        createAccountRequested = createAccount
+        try await login()
+    }
     var loginCalls = 0
     var tokenCalls = 0
     var onToken: (() -> Void)?
@@ -96,6 +101,16 @@ final class SessionTests: XCTestCase {
         XCTAssertFalse(app.busy)
     }
 
+    func testCreateAccountUsesSignupAndLoadsAPIIdentity() async throws {
+        let store = CredentialStore()
+        let app = try session(store)
+        await app.signIn(createAccount: true)
+        XCTAssertTrue(store.createAccountRequested)
+        XCTAssertEqual(store.clears, 1)
+        XCTAssertEqual(store.loginCalls, 1)
+        guard case .authenticated = app.state else { return XCTFail("Expected API identity after signup") }
+    }
+
     func testRestorationUsesRenewingStoreWithoutBrowserLogin() async throws {
         let store = CredentialStore()
         let app = try session(store)
@@ -151,7 +166,7 @@ final class SessionTests: XCTestCase {
         }
     }
 
-    func testLogoutRemovesIdentityBeforeBrowserAndSurvivesBrowserFailure() async throws {
+    func testLogoutClearsCredentialsWithoutOpeningBrowser() async throws {
         let store = CredentialStore()
         let app = try session(store)
         await app.restore()
@@ -162,7 +177,9 @@ final class SessionTests: XCTestCase {
         }
         await app.signOut()
         XCTAssertEqual(app.state, .signedOut)
-        XCTAssertNotNil(app.notice)
+        XCTAssertEqual(app.notice, "Signed out.")
+        XCTAssertEqual(store.logoutCalls, 0)
+        XCTAssertFalse(store.hasSession)
         let calls = store.tokenCalls
         await app.restore()
         XCTAssertEqual(store.tokenCalls, calls)

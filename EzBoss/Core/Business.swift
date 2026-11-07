@@ -33,9 +33,10 @@ struct Document: Decodable, Identifiable, Equatable {
     let currentRevision: Int?
     let collectionHold: Bool?
     let revisionsHistory: [DocumentHistory]?
+    let customerViews: [DocumentCustomerView]?
     var number: String { (estimateState == "invoice" ? invoiceNumber : estimateNumber) ?? "Number pending" }
     enum CodingKeys: String, CodingKey {
-        case id, estimateNumber, invoiceNumber, customerName, estimateState, clientState, total, subtotal, tax, projectDescription, validUntil, lineItems, currentRevision, collectionHold, revisionsHistory
+        case id, estimateNumber, invoiceNumber, customerName, estimateState, clientState, total, subtotal, tax, projectDescription, validUntil, lineItems, currentRevision, collectionHold, revisionsHistory, customerViews
     }
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -52,8 +53,14 @@ struct Document: Decodable, Identifiable, Equatable {
         lineItems = try c.decodeIfPresent([DocumentLine].self, forKey: .lineItems)
         currentRevision = try c.decodeIfPresent(Int.self, forKey: .currentRevision)
         collectionHold = try c.decodeIfPresent(Bool.self, forKey: .collectionHold)
+        customerViews = try c.decodeIfPresent([DocumentCustomerView].self, forKey: .customerViews)
         revisionsHistory = try c.decodeIfPresent([DocumentHistory].self, forKey: .revisionsHistory)
     }
+}
+struct DocumentCustomerView: Decodable, Identifiable, Equatable {
+    let id: Int
+    let viewedAt: String
+    let matchesCurrent: Bool?
 }
 struct DocumentLine: Decodable, Identifiable, Equatable {
     let id: Int
@@ -85,6 +92,7 @@ extension APIClient {
     func companies(accessToken: String, membership: String? = nil) async throws -> CompanyAccount {
         let query = membership.map { [URLQueryItem(name: "membershipId", value: $0)] } ?? []
         let (data, status) = try await resource("account/me", token: accessToken, query: query)
+        if status == 403 { return CompanyAccount(memberships:[],companyContext:nil) }
         if status == 409 {
             let discovery = try JSONDecoder().decode(CompanyDiscovery.self, from: data)
             return CompanyAccount(memberships: discovery.memberships, companyContext: nil)
@@ -92,8 +100,9 @@ extension APIClient {
         try checkResourceStatus(status)
         return try JSONDecoder().decode(CompanyAccount.self, from: data)
     }
-    func documents(accessToken: String, membership: String, search: String, kind: String?, offset: Int) async throws -> [Document] {
-        var query = [URLQueryItem(name: "limit", value: "25"), URLQueryItem(name: "offset", value: String(offset))]
+    func documents(accessToken: String, membership: String, search: String, kind: String?, offset: Int, dashboard: Bool = false) async throws -> [Document] {
+        var query = [URLQueryItem(name: "limit", value: dashboard ? "5" : "25"), URLQueryItem(name: "offset", value: String(offset))]
+        if dashboard { query.append(URLQueryItem(name: "summary", value: "true")) }
         if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { query.append(URLQueryItem(name: "customerName", value: search.trimmingCharacters(in: .whitespacesAndNewlines))) }
         if let kind { query.append(URLQueryItem(name: "estimateState", value: kind)) }
         let (data, status) = try await resource("estimates", token: accessToken, membership: membership, query: query)
@@ -171,7 +180,7 @@ struct DraftEditor {
         }
         body["taxRate"] = NSDecimalNumber(decimal: rate)
         // Identity and computed fields are never authored through this editor.
-        let allowed: Set<String> = ["customerName", "customerEmail", "projectDescription", "taxRate", "lineItems", "expectedUpdatedAt", "draftOnly", "creationRequestId", "customerId", "clientSnapshot", "customerPhone", "serviceAddress", "serviceAddress2", "serviceCity", "serviceState", "serviceZipCode"]
+        let allowed: Set<String> = ["customerName", "customerEmail", "projectDescription", "taxRate", "lineItems", "expectedUpdatedAt", "draftOnly", "creationRequestId", "customerId", "clientSnapshot", "companyContactAdditions", "customerPhone", "serviceAddress", "serviceAddress2", "serviceCity", "serviceState", "serviceZipCode"]
         body = body.filter { allowed.contains($0.key) }
         body["nativeAuthoring"] = true
         body["draftOnly"] = id == nil || payload["estimateState"] as? String == "draft"
@@ -224,9 +233,44 @@ extension APIClient {
     }
 }
 extension DraftEditor {
+    var canAddCompanyContact: Bool {
+        let snapshot = payload["clientSnapshot"] as? [String: Any]
+        return payload["customerId"] is String && snapshot?["billTo"] as? String == "company"
+            && payload["estimateState"] as? String != "change-order"
+    }
+    var pendingCompanyContacts: [[String: String]] {
+        payload["companyContactAdditions"] as? [[String: String]] ?? []
+    }
+    var companyContactNotice: String? {
+        guard let result = payload["companyContactsAdded"] as? [String: Any],
+              let name = result["companyName"] as? String, let count = result["count"] as? Int else { return nil }
+        return count == 1 ? "Contact added to “\(name)”." : "\(count) contacts added to “\(name)”."
+    }
+    mutating func addCompanyContact(_ contact: [String: String]) {
+        var snapshot = payload["clientSnapshot"] as? [String: Any] ?? [:]
+        let existing = snapshot["additionalContacts"] as? [[String: Any]] ?? []
+        snapshot["additionalContacts"] = existing + [contact]
+        payload["clientSnapshot"] = snapshot
+        payload["companyContactAdditions"] = pendingCompanyContacts + [contact]
+    }
+    mutating func removePendingCompanyContact(at index: Int) {
+        var pending = pendingCompanyContacts
+        var snapshot = payload["clientSnapshot"] as? [String: Any] ?? [:]
+        var contacts = snapshot["additionalContacts"] as? [[String: Any]] ?? []
+        contacts.remove(at: contacts.count - pending.count + index)
+        pending.remove(at: index)
+        snapshot["additionalContacts"] = contacts
+        payload["clientSnapshot"] = snapshot
+        payload["companyContactAdditions"] = pending.isEmpty ? nil : pending
+    }
     mutating func select(_ customer: NativeCustomer, contact: [String: Any]? = nil) {
+        if payload["customerId"] as? String != String(customer.id) {
+            payload.removeValue(forKey: "companyContactAdditions")
+        }
         payload["customerId"] = String(customer.id)
-        payload["clientSnapshot"] = customer.payload
+        var snapshot = customer.payload
+        snapshot["additionalContacts"] = customer.contacts + pendingCompanyContacts
+        payload["clientSnapshot"] = snapshot
         self.customer = customer.name
         email = contact?["email"] as? String ?? customer.payload["email"] as? String ?? ""
         payload["customerPhone"] = contact?["phone"] as? String ?? customer.payload["phoneMobile"] as? String ?? ""
@@ -333,4 +377,28 @@ func nativeAIReview(_ proposal:[String:Any],inventory:[String:Any]) throws -> [S
         preview.append(value.merging(["name":row["name"] as? String ?? "Inventory"]){_,new in new})
     }
     return ["collection":["name":name,"description":description,"items":clean],"preview":preview]
+}
+
+struct CompanyContactAppendResult: Decodable {
+    struct Added: Decodable {
+        let companyName: String
+        let count: Int
+    }
+    let companyContactsAdded: Added?
+    var message: String? {
+        guard let added = companyContactsAdded else { return nil }
+        return added.count == 1 ? "Contact added to “\(added.companyName)”." : "\(added.count) contacts added to “\(added.companyName)”."
+    }
+}
+
+extension APIClient {
+    func appendCompanyContacts(accessToken: String, membership: String, clientID: String,
+                               contacts: [[String: String]]) async throws -> CompanyContactAppendResult {
+        guard clientID.allSatisfy(\.isNumber), !clientID.isEmpty else { throw APIError.invalidResponse }
+        let body = try JSONSerialization.data(withJSONObject: ["additionalContacts": contacts])
+        let (data, status) = try await resource("clients/\(clientID)/contacts", token: accessToken,
+                                                membership: membership, method: "POST", body: body)
+        try checkResourceStatus(status)
+        return try JSONDecoder().decode(CompanyContactAppendResult.self, from: data)
+    }
 }
