@@ -100,12 +100,13 @@ private struct WorkspaceHeader: View {
 
 private enum WorkspacePage: String, CaseIterable, Identifiable {
     case dashboard = "Dashboard", estimates = "Estimates", projects = "Projects", inventory = "Inventory"
-    case collections = "Collections", workOrders = "Work Orders", finances = "Finances", purchasing = "Purchasing", people = "People", settings = "Settings"
+    case collections = "Collections", workOrders = "Work Orders", claims = "Claims", finances = "Finances", purchasing = "Purchasing", people = "People", settings = "Settings"
     var id: String { rawValue }
     var icon: String {
         switch self {
         case .dashboard: return "square.grid.2x2"
         case .estimates: return "doc.text"
+        case .claims: return "wrench.and.screwdriver"
         case .projects: return "building.2"
         case .inventory: return "shippingbox"
         case .collections: return "square.stack"
@@ -127,7 +128,14 @@ private struct CompanyHome: View {
     @State private var profileFirstName: String?
     @State private var page: WorkspacePage = .dashboard
     @State private var drawer = false
+    @State private var packingStart: Date?
+    @State private var inventoryActivated = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var allowedPages: Set<String> = []
+    @State private var canWriteProjects = false
+    @State private var canDeleteProjects = false
+    @State private var canWriteProjectDocuments = false
+    @State private var canReadClaims = false
     @State private var accessError: String?
     @State private var accessLoaded = false
     @State private var path = NavigationPath()
@@ -193,41 +201,98 @@ private struct CompanyHome: View {
         .tint(WorkspaceDesign.primary)
         .environment(\.defaultMinListRowHeight, 48)
         .task { await loadAccess() }
+        .task(id: packingStart) {
+            guard let start = packingStart else { return }
+            let remaining = max(0, InventoryPackingIcon.duration + start.timeIntervalSinceNow)
+            try? await Task.sleep(for: .seconds(remaining))
+            guard !Task.isCancelled, packingStart == start else { return }
+            finishInventoryPlayback()
+        }
+        .onChange(of: reduceMotion) { _, reduced in
+            if reduced { finishInventoryPlayback() }
+        }
     }
     private func canOpen(_ item: WorkspacePage) -> Bool {
         if item == .settings { return true }
         if item == .people { return allowedPages.contains("clients") || allowedPages.contains("employees") }
+        if item == .claims { return canReadClaims && allowedPages.contains("estimates") }
         return allowedPages.contains(item == .workOrders ? "work-orders" : item == .finances ? "finances" : item.rawValue.lowercased())
     }
     private func loadAccess() async {
-        accessLoaded = false; accessError = nil; allowedPages = []
+        accessLoaded = false; accessError = nil; allowedPages = []; canWriteProjects = false; canDeleteProjects = false; canWriteProjectDocuments = false; canReadClaims = false
         defer { accessLoaded = true }
         do {
             let result = try await session.business { api, token in try await api.operation("account/me?membershipId=\(membership)", token: token, membership: membership) }
             guard let account = result as? [String: Any], let effective = account["effectivePermissions"] as? [String: Any], let pages = effective["pages"] as? [String: [String: Any]] else { throw APIError.invalidResponse }
             allowedPages = Set(pages.filter { $0.value["allowed"] as? Bool == true }.map(\.key))
             let capabilities = effective["capabilities"] as? [String: [String: Any]] ?? [:]
+            canWriteProjects = capabilities["write:projects"]?["allowed"] as? Bool == true
+            canDeleteProjects = capabilities["delete:projects"]?["allowed"] as? Bool == true
+            canReadClaims = capabilities["read:estimates"]?["allowed"] as? Bool == true
+            canWriteProjectDocuments = canReadClaims &&
+                capabilities["write:estimates"]?["allowed"] as? Bool == true
             for key in ["inventory", "collections", "purchasing"] where capabilities["read:\(key)"]?["allowed"] as? Bool != true { allowedPages.remove(key) }
             if !["inventory-products", "inventory-tools", "inventory-equipment"].allSatisfy(allowedPages.contains) || capabilities["read:inventory"]?["allowed"] as? Bool != true { allowedPages.remove("purchasing") }
             if !canOpen(page), let first = WorkspacePage.allCases.first(where: canOpen) { page = first }
         } catch { accessError = "Workspace access could not be loaded. Retry or open Settings for account requests." }
     }
-    private func dismissDrawer() { drawer = false; menuFocused = true }
+    private func dismissDrawer() {
+        drawer = false
+        packingStart = nil
+        inventoryActivated = false
+        menuFocused = true
+    }
+    private func finishInventoryPlayback() {
+        packingStart = nil
+        if inventoryActivated { dismissDrawer() }
+    }
+    private func inventoryHover(_ hovering: Bool) {
+        if hovering {
+            if !reduceMotion && packingStart == nil { packingStart = Date() }
+        } else if !inventoryActivated {
+            packingStart = nil
+        }
+    }
+
     private func drawerRow(_ item: WorkspacePage) -> some View {
-        Button { page = item; path = NavigationPath(); dismissDrawer() } label: {
-            Label(item.rawValue, systemImage: item.icon).frame(maxWidth: .infinity, minHeight: 48, alignment: .leading).padding(.horizontal, 12)
+        Button {
+            page = item
+            path = NavigationPath()
+            if item == .inventory && !reduceMotion {
+                inventoryActivated = true
+                if packingStart == nil { packingStart = Date() }
+            } else {
+                dismissDrawer()
+            }
+        } label: {
+            Group {
+                if item == .inventory {
+                    HStack(spacing: 8) {
+                        InventoryPackingIcon(start: packingStart)
+                        Text(item.rawValue)
+                    }
+                } else {
+                    Label(item.rawValue, systemImage: item.icon)
+                }
+            }
+            .frame(maxWidth: .infinity, minHeight: 48, alignment: .leading)
+            .padding(.horizontal, 12)
         }
         .buttonStyle(.plain)
         .background(page == item ? WorkspaceDesign.primary : .clear)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .accessibilityAddTraits(page == item ? .isSelected : [])
+        .onHover { hovering in
+            if item == .inventory { inventoryHover(hovering) }
+        }
     }
     @ViewBuilder private var destination: some View {
         switch page {
         case .dashboard: dashboard
-        case .estimates: DocumentBrowser(session: session, membership: membership, initialKind: "")
-        case .projects: NativeBusinessRecords(session: session, membership: membership, project: true)
-        case .finances: NativeBusinessRecords(session: session, membership: membership, project: false)
+        case .estimates: DocumentBrowser(session: session, membership: membership, initialKind: "", canWriteEstimates: canWriteProjectDocuments)
+        case .claims: ClaimsWorkspace(session: session, membership: membership, canWrite: canWriteProjectDocuments)
+        case .projects: NativeBusinessRecords(session: session, membership: membership, project: true, canWriteProjects: canWriteProjects, canDeleteProjects: canDeleteProjects, canWriteProjectDocuments: canWriteProjectDocuments)
+        case .finances: NativeBusinessRecords(session: session, membership: membership, project: false, canWriteProjects: false, canDeleteProjects: false, canWriteProjectDocuments: false)
         case .inventory: inventory
         case .collections: OperationalBrowser(session: session, membership: membership, module: .collections)
         case .workOrders: OperationalBrowser(session: session, membership: membership, module: .workOrders)
@@ -262,12 +327,12 @@ private struct CompanyHome: View {
                 }.listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
             }
             if canOpen(.estimates) { Section("Recent Documents") {
-                DocumentResults(session: session, membership: membership, search: "", kind: nil, dashboard: true)
+                DocumentResults(session: session, membership: membership, search: "", kind: nil, dashboard: true, canWriteEstimates: canWriteProjectDocuments)
             }
             }
             if canOpen(.estimates) { Section("Business documents") {
                 NavigationLink("Create estimate draft") { DraftEditorView(session: session, membership: membership, id: nil) }
-                NavigationLink("Invoices") { DocumentBrowser(session: session, membership: membership, initialKind: "invoice") }
+                NavigationLink("Invoices") { DocumentBrowser(session: session, membership: membership, initialKind: "invoice", canWriteEstimates: canWriteProjectDocuments) }
             }
             }
             if canOpen(.workOrders) { NativeDashboardPanel(session: session, membership: membership, kind: "schedule") }
@@ -428,10 +493,12 @@ private struct DocumentBrowser: View {
     @ObservedObject var session: Session
     let membership: String
     let initialKind: String
+    let canWriteEstimates: Bool
     @State private var search = ""
     @State private var kind: String
-    init(session: Session, membership: String, initialKind: String) {
+    init(session: Session, membership: String, initialKind: String, canWriteEstimates: Bool) {
         self.session = session; self.membership = membership; self.initialKind = initialKind
+        self.canWriteEstimates = canWriteEstimates
         _kind = State(initialValue: initialKind)
     }
     var body: some View {
@@ -442,7 +509,7 @@ private struct DocumentBrowser: View {
                 Text("All").tag(""); Text("Estimate").tag("estimate"); Text("Draft").tag("draft")
                 Text("Invoice").tag("invoice"); Text("Change order").tag("change-order")
             }
-            DocumentResults(session: session, membership: membership, search: search, kind: kind.isEmpty ? nil : kind, dashboard: false)
+            DocumentResults(session: session, membership: membership, search: search, kind: kind.isEmpty ? nil : kind, dashboard: false, canWriteEstimates: canWriteEstimates)
         }
         .searchable(text: $search, prompt: "Customer name")
         .workspaceSurface().navigationTitle("Documents")
@@ -457,7 +524,7 @@ private final class DocumentListModel: ObservableObject {
     @Published var more = false
     private var offset = 0
     private var generation = UUID()
-    func load(_ session: Session, membership: String, search: String, kind: String?, reset: Bool, dashboard: Bool = false) async {
+    func load(_ session: Session, membership: String, search: String, kind: String?, reset: Bool, dashboard: Bool = false, projectID: String? = nil) async {
         if !reset && loading { return }
         let request = UUID(); generation = request
         if reset { rows = []; offset = 0; more = false }
@@ -467,7 +534,7 @@ private final class DocumentListModel: ObservableObject {
         do {
             if reset && !dashboard && !search.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
             let page = try await session.business { api, token in
-                try await api.documents(accessToken: token, membership: membership, search: search, kind: kind, offset: next, dashboard: dashboard)
+                try await api.documents(accessToken: token, membership: membership, search: search, kind: kind, offset: next, dashboard: dashboard, projectID: projectID)
             }
             guard generation == request else { return }
             offset = next + page.count
@@ -489,13 +556,15 @@ private struct DocumentResults: View {
     let search: String
     let kind: String?
     let dashboard: Bool
+    let canWriteEstimates: Bool
+    var projectID: String? = nil
     @StateObject private var model = DocumentListModel()
-    private var query: String { membership + "|" + search + "|" + (kind ?? "") }
+    private var query: String { membership + "|" + search + "|" + (kind ?? "") + "|" + (projectID ?? "") }
     var body: some View {
         Group {
             ForEach(dashboard ? Array(model.rows.prefix(5)) : model.rows) { document in
                 NavigationLink {
-                    DocumentDetail(session: session, membership: membership, id: document.id)
+                    DocumentDetail(session: session, membership: membership, id: document.id, canWriteEstimates: canWriteEstimates)
                 } label: {
                     VStack(alignment: .leading, spacing: 5) {
                         HStack(alignment: .firstTextBaseline) {
@@ -521,13 +590,291 @@ private struct DocumentResults: View {
         }
         .task(id: query) { await load(reset: true) }
     }
-    private func load(reset: Bool) async { await model.load(session, membership: membership, search: search, kind: kind, reset: reset, dashboard: dashboard) }
+    private func load(reset: Bool) async { await model.load(session, membership: membership, search: search, kind: kind, reset: reset, dashboard: dashboard, projectID: projectID) }
+}
+
+private struct ProjectDocuments: View {
+    @ObservedObject var session: Session
+    let membership: String
+    let project: OperationRow
+    let canCreate: Bool
+    let canWriteEstimates: Bool
+    @State private var documentRevision = 0
+    @State private var kind = ""
+    @State private var search = ""
+
+    var body: some View {
+        List {
+            if canCreate {
+                NavigationLink("Create estimate draft") {
+                    DraftEditorView(session: session, membership: membership, id: nil, project: project) {
+                        documentRevision += 1
+                    }
+                }
+            }
+            Picker("Document type", selection: $kind) {
+                Text("All").tag(""); Text("Estimate").tag("estimate"); Text("Draft").tag("draft")
+                Text("Invoice").tag("invoice"); Text("Change order").tag("change-order")
+            }
+            DocumentResults(session: session, membership: membership, search: search,
+                            kind: kind.isEmpty ? nil : kind, dashboard: false, canWriteEstimates: canWriteEstimates, projectID: project.id)
+                .id(documentRevision)
+        }
+        .searchable(text: $search, prompt: "Customer name")
+        .workspaceSurface().navigationTitle("Project documents")
+    }
+}
+
+private struct ClaimsWorkspace: View {
+    @ObservedObject var session: Session
+    let membership: String
+    let canWrite: Bool
+    @State private var picking = false
+    @State private var search = ""
+    @State private var offset = 0
+    @State private var page: ClaimJobsPage?
+    @State private var error: String?
+    @State private var retry = 0
+    @State private var openedJob: Int?
+    @State private var selectedEstimate: ClaimJobRow?
+
+    var body: some View {
+        List {
+            WorkspaceHeader(title: "Claims", subtitle: "Find a job’s callback and repair history.")
+                .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
+            if let selectedEstimate, let documentId = selectedEstimate.documentId {
+                Button("Choose a different job") { self.selectedEstimate = nil }
+                Text(selectedEstimate.title).font(.headline)
+                Text(selectedEstimate.summary).foregroundStyle(.secondary)
+                DocumentClaims(session: session, membership: membership, target: .estimate(documentId), canWrite: canWrite) { jobId in
+                    self.selectedEstimate = nil
+                    showPicker(false)
+                    openedJob = jobId
+                }.id(documentId)
+            } else {
+                if picking { Button("Back to claims") { showPicker(false) } }
+                TextField(picking ? "Find an estimate for this job" : "Search claims", text: $search,
+                          prompt: Text("Client, address, project, or document number"))
+                    .onChange(of: search) { _, _ in offset = 0 }
+                if let error {
+                    Text(error).foregroundStyle(.red)
+                    Button("Retry") { retry += 1 }
+                } else if let page {
+                    if page.jobs.isEmpty { Text(picking ? "No active estimates match." : search.isEmpty ? "No claims yet." : "No matching claim histories.") }
+                    ForEach(page.jobs) { row in
+                        Button {
+                            if picking { selectedEstimate = row } else { openedJob = row.jobId }
+                        } label: {
+                            VStack(alignment: .leading, spacing: 4) {
+                                Text(row.title).font(.headline).foregroundStyle(.primary)
+                                Text(row.summary).font(.subheadline).foregroundStyle(.secondary)
+                                if let count = row.claimCount, let date = row.lastClaimAt {
+                                    Text("\(count) \(count == 1 ? "callback" : "callbacks") · Last logged \(claimLoggedDate(date))")
+                                        .font(.caption).foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                    if offset > 0 { Button("Previous jobs") { offset -= 25 } }
+                    if page.hasMore { Button("Next jobs") { offset += 25 } }
+                } else {
+                    ProgressView("Loading jobs…")
+                }
+            }
+        }
+        .workspaceSurface().navigationTitle("Claims")
+        .toolbar {
+            if canWrite && !picking {
+                Button { showPicker(true) } label: { Label("New Claim", systemImage: "plus") }
+            }
+        }
+        .navigationDestination(item: $openedJob) { id in
+            ClaimJobView(session: session, membership: membership, jobId: id, canWrite: canWrite)
+        }
+        .task(id: "\(picking)|\(offset)|\(search)|\(retry)") { await load() }
+    }
+
+    private func showPicker(_ value: Bool) {
+        picking = value
+        search = ""
+        offset = 0
+    }
+
+    private func load() async {
+        page = nil
+        error = nil
+        do {
+            if !search.isEmpty { try await Task.sleep(for: .milliseconds(250)) }
+            let result = try await session.business { api, token in
+                try await api.claimJobs(accessToken: token, membership: membership, picking: picking, search: search, offset: offset)
+            }
+            try Task.checkCancellation()
+            page = result
+        } catch is CancellationError { }
+        catch { if !Task.isCancelled { self.error = (error as? APIError)?.message ?? "Could not load jobs." } }
+    }
+}
+
+private struct ClaimJobView: View {
+    @ObservedObject var session: Session
+    let membership: String
+    let jobId: Int
+    let canWrite: Bool
+
+    var body: some View {
+        List { DocumentClaims(session: session, membership: membership, target: .job(jobId), canWrite: canWrite) }
+            .workspaceSurface().navigationTitle("Claim history")
+    }
+}
+
+private func claimLoggedDate(_ value: String) -> String {
+    let date = (try? Date.ISO8601FormatStyle(includingFractionalSeconds: true).parse(value)) ?? (try? Date.ISO8601FormatStyle().parse(value))
+    return date?.formatted(date: .abbreviated, time: .omitted) ?? String(value.prefix(10))
+}
+
+private struct DocumentClaims: View {
+    @ObservedObject var session: Session
+    let membership: String
+    let target: ClaimTarget
+    let canWrite: Bool
+    var onSaved: ((Int) -> Void)?
+    @State private var data: EstimateClaims?
+    @State private var draft = EstimateClaimDraft()
+    @State private var adding = false
+    @State private var saving = false
+    @State private var loadError: String?
+    @State private var saveError: String?
+    @State private var reload = 0
+
+    var body: some View {
+        Section {
+            if let job = data?.job {
+                Text(job.title).font(.headline)
+                Text(job.summary).foregroundStyle(.secondary)
+                if let documentId = job.documentId {
+                    NavigationLink("Open document Claims tab") {
+                        DocumentDetail(session: session, membership: membership, id: documentId,
+                                       canWriteEstimates: canWrite, selectedTab: "Claims")
+                    }
+                }
+            } else if let data, !data.claims.isEmpty, onSaved == nil {
+                NavigationLink("View all claims for this job") {
+                    ClaimJobView(session: session, membership: membership, jobId: data.jobId, canWrite: canWrite)
+                }
+            }
+            Text("Keep a record of each return visit and repair at this job site.")
+                .foregroundStyle(.secondary)
+            if adding && canWrite && data?.archived == false {
+                Group {
+                    TextField("Name", text: $draft.name, prompt: Text("e.g. Recurring roof leak"))
+                    TextField("Location", text: $draft.location, prompt: Text("Where on the job site?"))
+                    TextField("Issue description", text: $draft.issueDescription, prompt: Text("What went wrong on this visit?"), axis: .vertical)
+                    TextField("Notes (optional)", text: $draft.notes, prompt: Text("How did you fix it?"), axis: .vertical)
+                }
+                .disabled(saving)
+                if let saveError { Text(saveError).foregroundStyle(.red) }
+                Button(saving ? "Saving…" : "Save claim") { Task { await save() } }.disabled(saving)
+                Button("Cancel", role: .cancel) { adding = false }.disabled(saving)
+            }
+            if let loadError {
+                Text(loadError).foregroundStyle(.red)
+                Button("Retry") { reload += 1 }
+            } else if let data {
+                if data.claims.isEmpty { Text("No claims yet.").foregroundStyle(.secondary) }
+                ForEach(data.claims) { claim in
+                    VStack(alignment: .leading, spacing: 8) {
+                        Text(claim.name).font(.headline)
+                        Text("Logged \(claimLoggedDate(claim.createdAt))")
+                            .font(.caption).foregroundStyle(.secondary)
+                        claimField("Location", claim.location)
+                        claimField("Issue description", claim.issueDescription)
+                        if !claim.notes.isEmpty { claimField("Notes", claim.notes) }
+                    }
+                    .padding(.vertical, 4)
+                }
+            } else {
+                ProgressView("Loading claims…")
+            }
+        } header: {
+            HStack {
+                Text("Claims")
+                Spacer()
+                if canWrite && data?.archived == false {
+                    Button {
+                        draft = EstimateClaimDraft()
+                        saveError = nil
+                        adding = true
+                    } label: {
+                        Image(systemName: "plus").frame(width: 44, height: 44)
+                    }
+                    .accessibilityLabel("Add claim")
+                    .disabled(adding)
+                }
+            }
+        }
+        .task(id: reload) { await load() }
+        .onAppear { if onSaved != nil && data == nil { adding = true } }
+    }
+
+    private func claimField(_ label: String, _ value: String) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            Text(label).font(.subheadline.weight(.semibold))
+            Text(value)
+        }
+    }
+
+    private func load() async {
+        loadError = nil
+        do {
+            let result = try await session.business { api, token in
+                try await api.claims(accessToken: token, membership: membership, target: target)
+            }
+            try Task.checkCancellation()
+            data = result
+        } catch is CancellationError { }
+        catch { loadError = (error as? APIError)?.message ?? "Could not load claims. Try again." }
+    }
+
+    private func save() async {
+        guard !saving, canWrite, data?.archived == false else { return }
+        var claim = draft
+        claim.name = claim.name.trimmingCharacters(in: .whitespacesAndNewlines)
+        claim.location = claim.location.trimmingCharacters(in: .whitespacesAndNewlines)
+        claim.issueDescription = claim.issueDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+        claim.notes = claim.notes.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !claim.name.isEmpty, !claim.location.isEmpty, !claim.issueDescription.isEmpty else {
+            saveError = "Enter a name, location, and issue description."
+            return
+        }
+        guard claim.name.utf16.count <= 200, claim.location.utf16.count <= 500,
+              claim.issueDescription.utf16.count <= 5000, claim.notes.utf16.count <= 5000 else {
+            saveError = "Use up to 200 characters for the name, 500 for the location, and 5,000 each for the issue description and notes."
+            return
+        }
+        saving = true
+        saveError = nil
+        defer { saving = false }
+        do {
+            let saved = try await session.business { api, token in
+                try await api.createClaim(accessToken: token, membership: membership, target: target, draft: claim)
+            }
+            data?.claims.removeAll { $0.id == saved.id }
+            data?.claims.insert(saved, at: 0)
+            adding = false
+            if let jobId = data?.jobId { onSaved?(jobId) }
+        } catch APIError.conflict {
+            saveError = "This claim was already saved with different details. Reopen Claims to view it."
+        } catch {
+            saveError = (error as? APIError)?.message ?? "Could not save the claim. Try again."
+        }
+    }
 }
 
 private struct DocumentDetail: View {
     @ObservedObject var session: Session
     let membership: String
     let id: Int
+    let canWriteEstimates: Bool
     @State private var document: Document?
     @State private var error: String?
     @State private var loading = false
@@ -538,9 +885,9 @@ private struct DocumentDetail: View {
     @State private var actionMessage: String?
     @State private var customerURL: URL?
     @State private var revokeWarning = false
-    @State private var selectedTab = "Estimate"
+    @State var selectedTab = "Estimate"
     private var tabs: [String] {
-        ["Estimate", "Client View"] + (document?.estimateState == "change-order" ? [] : ["Change Orders"]) + ["Payments", "Timeline", "Communication", "History"]
+        ["Estimate", "Client View"] + (document?.estimateState == "change-order" ? [] : ["Change Orders"]) + ["Payments", "Timeline", "Claims", "Communication", "History"]
     }
     var body: some View {
         VStack(spacing: 0) {
@@ -626,6 +973,10 @@ private struct DocumentDetail: View {
                         if let customerURL { Link("Open customer view", destination: customerURL); ShareLink(item: customerURL) }
                         if let actionMessage { Text(actionMessage) }
                     }
+                }
+                if selectedTab == "Claims" {
+                    DocumentClaims(session: session, membership: membership, target: .estimate(document.id), canWrite: canWriteEstimates)
+                        .id(document.id)
                 }
                 if selectedTab == "History" {
                 Section("History") {
@@ -718,6 +1069,8 @@ private struct DraftEditorView: View {
     @ObservedObject var session: Session
     let membership: String
     let id: Int?
+    var project: OperationRow? = nil
+    var onSaved: (() -> Void)? = nil
     @State private var draft = DraftEditor()
     @State private var busy = false
     @State private var ready = false
@@ -854,7 +1207,23 @@ private struct DraftEditorView: View {
     private func load() async {
         busy = true; error = nil; saved = false
         defer { busy = false }
-        guard let id else { ready = true; return }
+        guard let id else {
+            if let project {
+                let site = OperationRow(value: project.value["serviceAddress"] as? [String: Any] ?? [:])
+                draft.payload["projectId"] = project.id
+                draft.payload["customerId"] = project.text("clientId")
+                draft.customer = project.text("clientName")
+                draft.email = project.text("clientEmail")
+                draft.payload["customerPhone"] = project.text("clientPhone")
+                draft.payload["serviceAddress"] = site.text("address")
+                draft.payload["serviceAddress2"] = site.text("address2")
+                draft.payload["serviceCity"] = site.text("city")
+                draft.payload["serviceState"] = site.text("state")
+                draft.payload["serviceZipCode"] = site.text("zipCode")
+            }
+            ready = true
+            return
+        }
         do { draft = try await session.business { api, token in try await api.draft(accessToken: token, membership: membership, id: id) }; ready = true }
         catch { self.error = (error as? APIError)?.message ?? "Could not load draft. Retry when connected." }
     }
@@ -866,6 +1235,7 @@ private struct DraftEditorView: View {
             draft = try await session.business { api, token in try await api.saveDraft(accessToken: token, membership: membership, draft: value) }
             contactNotice = draft.companyContactNotice
             saved = true
+            onSaved?()
         } catch { self.error = (error as? APIError)?.message ?? "Save was not confirmed. Your edits are preserved. Reopen the document before retrying an uncertain create." }
     }
 }
@@ -939,6 +1309,7 @@ private struct OperationalBrowser: View {
     @ObservedObject var session: Session
     let membership: String
     let module: OperationalModule
+    var projectID: String? = nil
     @State private var rows: [OperationRow] = []
     @State private var error: String?
     @State private var loading = false
@@ -954,7 +1325,7 @@ private struct OperationalBrowser: View {
             }
             if loading { ProgressView("Loading…") }
             if let error { Text(error).foregroundStyle(.red); Button("Retry") { Task { await load() } } }
-            if rows.isEmpty && !loading && error == nil { Text("No items in this company.") }
+            if rows.isEmpty && !loading && error == nil { Text(projectID == nil ? "No items in this company." : "No linked records.") }
             if more && !loading { Button("Load more") { Task { await load(reset:false) } } }
             ForEach(rows.filter { search.isEmpty || $0.title.localizedCaseInsensitiveContains(search) }) { row in
                 NavigationLink {
@@ -969,7 +1340,7 @@ private struct OperationalBrowser: View {
         }
         .workspaceSurface().navigationTitle(module.title).searchable(text: $search)
         .toolbar {
-            if module.inventory || module == .collections || module == .purchasing {
+            if projectID == nil && (module.inventory || module == .collections || module == .purchasing) {
                 Button("Create") { creating = true }
             }
         }
@@ -983,8 +1354,20 @@ private struct OperationalBrowser: View {
         defer { loading = false }
         do {
             let offset = reset ? 0 : rows.count
+            var target = module.path
+            if let projectID {
+                var url = URLComponents()
+                url.path = target
+                url.queryItems = [URLQueryItem(name: "projectId", value: projectID)]
+                if module == .purchasing {
+                    url.queryItems?.append(contentsOf: [URLQueryItem(name: "limit", value: "25"), URLQueryItem(name: "offset", value: String(offset))])
+                }
+                target = url.string ?? target
+            } else if module == .purchasing {
+                target += "?limit=25&offset=\(offset)"
+            }
             let page = try await session.business { api, token in
-                try APIClient.operationRows(await api.operation(module.path+(module == .purchasing ? "?limit=25&offset=\(offset)" : ""), token: token, membership: membership))
+                try APIClient.operationRows(await api.operation(target, token: token, membership: membership))
             }
             if reset { rows = page } else { rows.append(contentsOf:page.filter { item in !rows.contains { $0.id == item.id } }) }
             more = module == .purchasing && page.count == 25
@@ -1682,6 +2065,20 @@ private struct NativeBusinessRecords: View {
     @ObservedObject var session: Session
     let membership: String
     let project: Bool
+    let canWriteProjects: Bool
+    let canDeleteProjects: Bool
+    let canWriteProjectDocuments: Bool
+    @State private var creationRequestID = UUID()
+    @State private var showArchived = false
+    @State private var appliedArchive = false
+    @State private var confirmDelete = false
+    @State private var search = ""
+    @State private var filter = "all"
+    @State private var page = 1
+    @State private var hasMore = false
+    @State private var detailID: String?
+    @State private var detail: OperationRow?
+    private let statuses = ["planning", "active", "on-hold", "completed", "invoiced", "cancelled"]
     @State private var rows: [OperationRow] = []
     @State private var clients: [OperationRow] = []
     @State private var selected: OperationRow?
@@ -1692,10 +2089,10 @@ private struct NativeBusinessRecords: View {
     @State private var error: String?
     @State private var message: String?
     private var path: String { project ? "projects" : "finance-records" }
-    private var projectKeys: [String] { ["name","startDate","estimatedEndDate","description","notes"] }
+    private var projectKeys: [String] { ["name","projectType","startDate","estimatedEndDate","actualEndDate","description","notes"] }
     private var addressKeys: [String] { ["address","address2","city","state","zipCode"] }
     private var financeKeys: [String] { ["date","estimate","poNumber","invoice","invoiceValue","payment","paymentMethod","paymentDate","serviceAddress","jobCompletionDate","completedFor","agent"] }
-    private var fields: [String] { project ? projectKeys+addressKeys : financeKeys }
+    private var fields: [String] { project ? projectKeys + addressKeys + ["completionPercentage", "tags"] : financeKeys }
     var body: some View {
         Form {
             WorkspaceHeader(title: project ? "Projects" : "Finances", subtitle: project ? "Projects, clients and progress" : "Records and linked payment summaries")
@@ -1705,50 +2102,272 @@ private struct NativeBusinessRecords: View {
             if let message { Text(message) }
             if let row=selected {
                 if project {
-                    Picker("Client",selection:$clientID) { Text("Select client").tag("");ForEach(clients){Text($0.title).tag($0.id)} }.disabled(busy)
-                    Picker("Status",selection:$status) { ForEach(["planning","active","on-hold","completed","invoiced","cancelled"],id: \.self){Text($0).tag($0)} }.disabled(busy)
+                    Picker("Client", selection: Binding(get: { clientID }, set: { selectClient($0, forNewProject: row.id.isEmpty) })) {
+                        Text("Select client").tag("")
+                        ForEach(clients) { Text($0.title).tag($0.id) }
+                    }.disabled(busy)
+                    Picker("Status",selection:$status) { ForEach(statuses,id: \.self){Text($0).tag($0)} }.disabled(busy)
                 } else {
                     if let summary=row.value["paymentSummary"] as? [String:Any] { Text("Ledger: \(summary["paid"] ?? "") / \(summary["total"] ?? "") · \(summary["status"] ?? "")") }
                     Text("Manual record fields do not alter the invoice payment ledger. Record payments or refunds on the document.")
                 }
-                ForEach(fields,id: \.self){key in TextField(key.replacingOccurrences(of:"([a-z])([A-Z])",with:"$1 $2",options:.regularExpression).capitalized,text:Binding(get:{values[key,default:""]},set:{values[key]=$0})).disabled(busy)}
+                ForEach(fields, id: \.self) { key in
+                    let label = key == "tags" ? "Tags (one per line)" : key.replacingOccurrences(of: "([a-z])([A-Z])", with: "$1 $2", options: .regularExpression).capitalized
+                    TextField(label, text: Binding(get: { values[key, default: ""] }, set: { values[key] = $0 }),
+                              axis: key == "tags" ? .vertical : .horizontal).disabled(busy)
+                }
                 Button("Save") { Task { await save(row) } }.disabled(busy)
                 Button("Discard / reload") { Task { await load() } }.disabled(busy)
+            } else if let id = detailID {
+                Button("Back to projects") { detailID = nil; detail = nil; Task { await load() } }.disabled(busy)
+                if let detail {
+                    Section("Overview") {
+                        Text(detail.title).font(.headline)
+                        Text("\(detail.text("projectNumber")) · \(detail.text("status"))")
+                        LabeledContent("Client", value: detail.text("clientName"))
+                        LabeledContent("Start", value: detail.text("startDate"))
+                        LabeledContent("Estimated end", value: detail.text("estimatedEndDate"))
+                        if !detail.text("actualEndDate").isEmpty { LabeledContent("Actual end", value: detail.text("actualEndDate")) }
+                        if !detail.text("projectType").isEmpty { LabeledContent("Project type", value: detail.text("projectType")) }
+                        if let tags = detail.value["tags"] as? [String], !tags.isEmpty {
+                            LabeledContent("Tags", value: tags.joined(separator: ", "))
+                        }
+                        LabeledContent("Progress", value: detail.text("completionPercentage") + "%")
+                        if let budget = detail.value["currentBudget"] as? Double {
+                            LabeledContent("Budget", value: budget.formatted(.currency(code: "USD")))
+                        }
+                        if let cost = detail.value["actualCost"] as? Double {
+                            LabeledContent("Spent", value: cost.formatted(.currency(code: "USD")))
+                        }
+                        if let address = detail.value["serviceAddress"] as? [String: Any] {
+                            LabeledContent("Site", value: addressKeys.map { OperationRow(value: address).text($0) }.filter { !$0.isEmpty }.joined(separator: ", "))
+                        }
+                        if !detail.text("description").isEmpty { Text(detail.text("description")) }
+                        if !detail.text("notes").isEmpty { Text(detail.text("notes")) }
+                    }
+                    let archived = !detail.text("archivedAt").isEmpty
+                    Section("Linked records") {
+                        NavigationLink("Documents") {
+                            ProjectDocuments(session: session, membership: membership, project: detail, canCreate: canWriteProjectDocuments && !archived,
+                                             canWriteEstimates: canWriteProjectDocuments)
+                        }
+                        NavigationLink("Work orders") {
+                            OperationalBrowser(session: session, membership: membership, module: .workOrders, projectID: id)
+                        }
+                        NavigationLink("Purchase orders") {
+                            OperationalBrowser(session: session, membership: membership, module: .purchasing, projectID: id)
+                        }
+                    }
+                    if archived { Text("Archived") }
+                    if canWriteProjects && !archived {
+                        Button("Edit project") { Task { await openEditor(detail) } }.disabled(busy)
+                    }
+                    if canWriteProjects {
+                        Button(archived ? "Restore project" : "Archive project") {
+                            Task { await changeLifecycle(detail, archived: !archived) }
+                        }.disabled(busy)
+                    }
+                    if canDeleteProjects {
+                        Button("Delete project", role: .destructive) { confirmDelete = true }.disabled(busy)
+                    }
+                    if error != nil { Button("Reload project") { Task { await openDetail(id) } }.disabled(busy) }
+                } else if !busy {
+                    Button("Retry") { Task { await openDetail(id) } }
+                }
+            } else if project {
+                Section("Find projects") {
+                    TextField("Search by name, number, or client", text: $search)
+                    Picker("Project status", selection: $filter) {
+                        Text("All statuses").tag("all")
+                        ForEach(statuses, id: \.self) { Text($0).tag($0) }
+                    }
+                    Toggle("Archived projects", isOn: $showArchived)
+                    Button("Apply filters") {
+                        appliedSearch = search
+                        appliedFilter = filter
+                        appliedArchive = showArchived
+                        Task { await load(page: 1) }
+                    }.disabled(busy || search.utf16.count > 500)
+                }
+                Button("Refresh / retry") { Task { await load() } }.disabled(busy)
+                if canWriteProjects {
+                    Button("Create project") { Task { await openEditor(OperationRow(value: [:])) } }.disabled(busy)
+                }
+                ForEach(rows) { row in
+                    Button { Task { await openDetail(row.id) } } label: {
+                        VStack(alignment: .leading) {
+                            Text(row.title)
+                            Text("\(row.text("projectNumber")) · \(row.text("clientName")) · \(row.text("status"))").font(.caption)
+                        }
+                    }.disabled(busy)
+                }
+                if rows.isEmpty && !busy && error == nil { Text("No projects found.") }
+                if page > 1 || hasMore {
+                    HStack {
+                        Button("Previous") { Task { await load(page: page - 1) } }.disabled(busy || page == 1)
+                        Spacer()
+                        Text("Page \(page)")
+                        Spacer()
+                        Button("Next") { Task { await load(page: page + 1) } }.disabled(busy || !hasMore)
+                    }.buttonStyle(.borderless)
+                }
             } else {
                 Button("Refresh / retry") { Task { await load() } }.disabled(busy)
-                Button(project ? "Create project" : "Create manual record") { edit(OperationRow(value:project ? [:] : ["id":UUID().uuidString.lowercased(),"data":[:]])) }.disabled(busy)
-                ForEach(rows) {row in Button(project ? row.title : ((row.value["data"] as? [String:Any])?["invoice"] as? String ?? row.id)) {edit(row)} }
+                Button("Create manual record") { edit(OperationRow(value: ["id": UUID().uuidString.lowercased(), "data": [:]])) }.disabled(busy)
+                ForEach(rows) { row in Button((row.value["data"] as? [String: Any])?["invoice"] as? String ?? row.id) { edit(row) } }
                 if rows.isEmpty && !busy && error == nil { Text("No records in this company.") }
             }
         }.workspaceSurface().navigationTitle(project ? "Projects" : "Finance").task { await load() }
+            .confirmationDialog("Permanently delete this project?", isPresented: $confirmDelete, titleVisibility: .visible) {
+                Button("Delete project", role: .destructive) {
+                    if let detail { Task { await changeLifecycle(detail, archived: nil) } }
+                }
+            }
+    }
+    private func selectClient(_ id: String, forNewProject: Bool) {
+        clientID = id
+        guard forNewProject else { return }
+        let client = clients.first { $0.id == id }
+        let prefix = (client?.value["billingEqualToService"] as? Bool == false) ? "service" : "billing"
+        let clientKeys = ["Address", "Address2", "City", "State", "ZipCode"]
+        for (field, suffix) in zip(addressKeys, clientKeys) { values[field] = client?.text(prefix + suffix) ?? "" }
     }
     private func edit(_ row: OperationRow) {
+        if project && row.id.isEmpty { creationRequestID = UUID() }
         selected=row;message=nil;clientID=row.text("clientId");status=row.text("status").isEmpty ? "planning" : row.text("status")
         let data=project ? row.value : row.value["data"] as? [String:Any] ?? [:]
         let address=row.value["serviceAddress"] as? [String:Any] ?? [:]
         values=Dictionary(uniqueKeysWithValues:fields.map{key in (key,OperationRow(value:project && addressKeys.contains(key) ? address : data).text(key))})
+        if project {
+            values["tags"] = (row.value["tags"] as? [String] ?? []).joined(separator: "\n")
+            if row.id.isEmpty { values["completionPercentage"] = "0" }
+        }
     }
-    private func load() async {
-        busy=true;error=nil;rows=[];selected=nil;defer{busy=false}
+    @State private var appliedSearch = ""
+    @State private var appliedFilter = "all"
+
+    private func load(page requestedPage: Int? = nil) async {
+        selected = nil
+        if let detailID { await openDetail(detailID); return }
+        busy = true; error = nil; rows = []
+        defer { busy = false }
         do {
-            rows=try await session.business { api,token in try APIClient.operationRows(await api.operation(path,token:token,membership:membership)) }
-            if project { let result=try await session.business { api,token in try await api.operation("clients",token:token,membership:membership) };clients=(result as? [String:Any] ?? [:]).values.compactMap{$0 as? [[String:Any]]}.flatMap{$0}.map{OperationRow(value:$0)} }
-        } catch { self.error=(error as? APIError)?.message ?? "Unable to load. Retry." }
+            var target = path
+            if project {
+                page = requestedPage ?? page
+                var url = URLComponents()
+                url.path = "projects/list"
+                url.queryItems = [URLQueryItem(name: "page", value: String(page)), URLQueryItem(name: "search", value: appliedSearch)]
+                if appliedFilter != "all" { url.queryItems?.append(URLQueryItem(name: "status", value: appliedFilter)) }
+                if appliedArchive { url.queryItems?.append(URLQueryItem(name: "archived", value: "true")) }
+                target = url.string ?? "projects/list"
+            }
+            let result = try await session.business { api, token in
+                try await api.operation(target, token: token, membership: membership)
+            }
+            rows = try APIClient.operationRows(result)
+            if project {
+                let payload = result as? [String: Any]
+                hasMore = payload?["hasMore"] as? Bool == true
+            }
+        } catch is CancellationError {
+            return
+        } catch {
+            hasMore = false
+            self.error = (error as? APIError)?.message ?? "Unable to load. Retry."
+        }
     }
+
+    private func openDetail(_ id: String) async {
+        detailID = id; detail = nil; error = nil; busy = true
+        defer { busy = false }
+        do {
+            let result = try await session.business { api, token in
+                try await api.operation("projects/" + id, token: token, membership: membership)
+            }
+            guard let value = result as? [String: Any] else { throw APIError.invalidResponse }
+            detail = OperationRow(value: value)
+        } catch is CancellationError {
+            return
+        } catch {
+            self.error = (error as? APIError) == .missingResource
+                ? "Project not found in this company."
+                : (error as? APIError)?.message ?? "Unable to load the project. Retry."
+        }
+    }
+
+    private func openEditor(_ row: OperationRow) async {
+        busy = true; error = nil
+        defer { busy = false }
+        do {
+            let result = try await session.business { api, token in
+                try await api.operation("clients", token: token, membership: membership)
+            }
+            clients = (result as? [String: Any] ?? [:]).values.compactMap { $0 as? [[String: Any]] }
+                .flatMap { $0 }.map { OperationRow(value: $0) }
+            edit(row)
+        } catch is CancellationError {
+            return
+        } catch {
+            self.error = (error as? APIError)?.message ?? "Unable to load clients. Retry."
+        }
+    }
+    private func changeLifecycle(_ row: OperationRow, archived: Bool?) async {
+        guard !busy else { return }
+        busy = true; error = nil; message = nil
+        defer { busy = false }
+        do {
+            var body: [String: Any] = ["version": row.text("version")]
+            if let archived { body["archived"] = archived }
+            let target = "projects/" + row.id + (archived == nil ? "" : "/archive")
+            _ = try await session.business { api, token in
+                try await api.operation(target, token: token, membership: membership, method: archived == nil ? "DELETE" : "POST", body: body)
+            }
+            if let archived { message = archived ? "Project archived." : "Project restored." }
+            else { detailID = nil; detail = nil; message = "Project deleted." }
+            await load()
+        } catch is CancellationError {
+            return
+        } catch {
+            self.error = (error as? APIError) == .conflict
+                ? "The project changed or has linked records. Reload it before trying again."
+                : (error as? APIError)?.message ?? "The project action could not be confirmed."
+        }
+    }
+
     private func save(_ row: OperationRow) async {
+        guard !busy else { return }
         busy=true;error=nil;message=nil
         do {
             var body: [String:Any]=[:];var target=path;var method="POST"
             if project {
                 for key in projectKeys {body[key]=values[key,default:""]};body["serviceAddress"]=Dictionary(uniqueKeysWithValues:addressKeys.map{($0,values[$0,default:""])});body["clientId"]=clientID;body["status"]=status
+                let actualEnd = values["actualEndDate", default: ""].trimmingCharacters(in: .whitespacesAndNewlines)
+                body["actualEndDate"] = actualEnd.isEmpty ? NSNull() as Any : actualEnd
+                guard let completion = Double(values["completionPercentage", default: ""]), (0...100).contains(completion) else {
+                    error = "Enter a completion percentage from 0 to 100."
+                    busy = false
+                    return
+                }
+                body["completionPercentage"] = completion
+                let tagText = values["tags", default: ""]
+                let oldTags = row.value["tags"] as? [String] ?? []
+                if tagText != oldTags.joined(separator: "\n") {
+                    body["tags"] = tagText.split(separator: "\n").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
+                }
                 if !row.id.isEmpty { body["version"]=row.value["version"];target += "/"+row.id;method="PATCH" }
+                else { body["creationRequestId"] = creationRequestID.uuidString.lowercased() }
             } else {
                 let data=Dictionary(uniqueKeysWithValues:financeKeys.map{($0,values[$0,default:""])})
                 if let version=row.value["version"] {body=["version":version,"data":data];target += "/"+row.id;method="PUT"}
                 else {body=["records":[["id":row.id,"data":data]]]}
             }
             _=try await session.business {api,token in try await api.operation(target,token:token,membership:membership,method:method,body:body)}
-            message="Saved";await load()
+            message = "Saved"
+            if project && row.id.isEmpty {
+                appliedArchive = false; showArchived = false
+                await load(page: 1)
+            } else { await load() }
         } catch { self.error=(error as? APIError)?.message ?? "Save was not confirmed. Reload before retrying." }
         busy=false
     }
@@ -1801,5 +2420,111 @@ private struct NativeInvitations: View {
             email="";requestID=UUID().uuidString.lowercased();await load()
         }catch{self.error=(error as? APIError)?.message ?? "Delivery was not confirmed. Refresh status before retrying."}
         busy=false
+    }
+}
+
+private struct InventoryPackingIcon: View {
+    let start: Date?
+    static let duration = 2.43
+
+    var body: some View {
+        Color.clear.frame(width: 20, height: 20)
+            .overlay(alignment: .topLeading) {
+                TimelineView(.animation(paused: start == nil)) { timeline in
+                    let elapsed = start.map { timeline.date.timeIntervalSince($0) } ?? 0
+                    Canvas { context, _ in
+                        drawPacking(in: context, time: elapsed >= Self.duration ? 0 : elapsed * 2600 / Self.duration)
+                    }
+                    .frame(width: 36, height: 50)
+                    .clipped()
+                    .offset(x: -4, y: -15)
+                }
+            }
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+    }
+
+    private func drawPacking(in context: GraphicsContext, time: Double) {
+        let half = 25.0, rim = 46.7
+        typealias Point = (x: Double, y: Double, z: Double)
+        func phase(_ from: Double, _ to: Double) -> Double { min(1, max(0, (time - from) / (to - from))) }
+        func ease(_ p: Double) -> Double { p * p * (3 - 2 * p) }
+
+        let angle = 2.39 * (ease(phase(280, 650)) - ease(phase(1480, 1800)))
+        let ship = phase(1950, 2550)
+        let pullback = 9 * sin(.pi / 2 * phase(1830, 1950)) * (1 - ship)
+        let x = 14 + (165 * ship * ship - pullback) * 0.2
+        let y = 30 - 3 * ship
+        context.drawLayer { layer in
+            let ink = GraphicsContext.Shading.color(.white)
+            if ship > 0 && ship < 1 {
+                var trail = Path()
+                for (dy, trailing) in [(-3.0, 0.0), (0, 3), (3, 0)] {
+                    let end = x - 10 - trailing
+                    trail.move(to: CGPoint(x: end - 3 - ship * 7, y: y + dy))
+                    trail.addLine(to: CGPoint(x: end, y: y + dy))
+                }
+                var faded = layer
+                faded.opacity = 0.55 * sin(.pi * ship)
+                faded.stroke(trail, with: ink, style: StrokeStyle(lineWidth: 0.9, lineCap: .round))
+            }
+            layer.translateBy(x: x, y: y)
+            layer.scaleBy(x: 0.2, y: 0.2)
+            layer.rotate(by: .radians(-0.085 * ship))
+
+            func path(_ points: [Point], in layer: GraphicsContext, face: Bool = false, width: Double = 8.4, rounding: [Double] = []) {
+                let projected = points.map { CGPoint(x: ($0.x - $0.y) * 0.84, y: ($0.x + $0.y) * 0.485 - $0.z) }
+                var shape = Path()
+                if let last = projected.last, !rounding.isEmpty {
+                    shape.move(to: CGPoint(x: (projected[0].x + last.x) / 2, y: (projected[0].y + last.y) / 2))
+                    for (index, point) in projected.enumerated() {
+                        if rounding[index] == 0 { shape.addLine(to: point) }
+                        else { shape.addArc(tangent1End: point, tangent2End: projected[(index + 1) % projected.count], radius: rounding[index]) }
+                    }
+                } else {
+                    shape.addLines(projected)
+                }
+                if face {
+                    shape.closeSubpath()
+                    var mask = layer
+                    mask.blendMode = .destinationOut
+                    mask.fill(shape, with: .color(.white))
+                }
+                layer.stroke(shape, with: ink, style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
+            }
+
+            func flap(_ side: Double) {
+                let hinge = side * half
+                let edge = hinge - side * half * cos(angle)
+                let rise = rim + half * sin(angle)
+                path([(-half, hinge, rim), (half, hinge, rim), (half, edge, rise), (-half, edge, rise)], in: layer, face: true)
+            }
+
+            path([(-half, -half, rim), (half, -half, rim), (half, half, rim), (-half, half, rim)], in: layer, face: true, rounding: [9.25, 0, 0, 0])
+            if angle > 0 {
+                flap(-1)
+                if time > 640 && time < 1480 {
+                    let fall = phase(770, 1230)
+                    let base = 98 - 94 * fall * fall + 5 * sin(.pi * phase(1230, 1450))
+                    let top = base + rim * 0.38
+                    let a = 9.5, width = 3.2
+                    var parcel = layer
+                    parcel.opacity = phase(640, 770)
+                    parcel.translateBy(x: -8 * (1 - fall), y: 0)
+                    parcel.rotate(by: .radians(-0.16 * (1 - fall)))
+                    path([(-a, -a, top), (a, -a, top), (a, -a, base), (a, a, base), (-a, a, base), (-a, a, top)],
+                         in: parcel, face: true, width: width, rounding: Array(repeating: 3.5, count: 6))
+                    path([(-a, a, top), (a, a, top), (a, -a, top)], in: parcel, width: width)
+                    path([(a, a, top), (a, a, base)], in: parcel, width: width)
+                    path([(-a, 0, top), (a, 0, top)], in: parcel, width: width)
+                }
+            } else {
+                path([(-half, 0, rim), (half, 0, rim)], in: layer)
+            }
+            path([(-half, half, rim), (half, half, rim), (half, -half, rim), (half, -half, 0), (half, half, 0), (-half, half, 0)],
+                 in: layer, face: true, rounding: [0, 0, 0, 9.25, 9.25, 9.25])
+            path([(half, half, rim), (half, half, 0)], in: layer)
+            if angle > 0 { flap(1) }
+        }
     }
 }

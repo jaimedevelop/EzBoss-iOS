@@ -100,11 +100,12 @@ extension APIClient {
         try checkResourceStatus(status)
         return try JSONDecoder().decode(CompanyAccount.self, from: data)
     }
-    func documents(accessToken: String, membership: String, search: String, kind: String?, offset: Int, dashboard: Bool = false) async throws -> [Document] {
+    func documents(accessToken: String, membership: String, search: String, kind: String?, offset: Int, dashboard: Bool = false, projectID: String? = nil) async throws -> [Document] {
         var query = [URLQueryItem(name: "limit", value: dashboard ? "5" : "25"), URLQueryItem(name: "offset", value: String(offset))]
         if dashboard { query.append(URLQueryItem(name: "summary", value: "true")) }
         if !search.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { query.append(URLQueryItem(name: "customerName", value: search.trimmingCharacters(in: .whitespacesAndNewlines))) }
         if let kind { query.append(URLQueryItem(name: "estimateState", value: kind)) }
+        if let projectID { query.append(URLQueryItem(name: "projectId", value: projectID)) }
         let (data, status) = try await resource("estimates", token: accessToken, membership: membership, query: query)
         try checkResourceStatus(status)
         return try JSONDecoder().decode([Document].self, from: data)
@@ -114,6 +115,25 @@ extension APIClient {
         let (data, status) = try await resource("estimates/\(id)", token: accessToken, membership: membership)
         try checkResourceStatus(status)
         return try JSONDecoder().decode(Document.self, from: data)
+    }
+    func claims(accessToken: String, membership: String, target: ClaimTarget) async throws -> EstimateClaims {
+        let (data, status) = try await resource(target.path, token: accessToken, membership: membership)
+        try checkResourceStatus(status)
+        return try JSONDecoder().decode(EstimateClaims.self, from: data)
+    }
+    func createClaim(accessToken: String, membership: String, target: ClaimTarget, draft: EstimateClaimDraft) async throws -> EstimateClaim {
+        let (data, status) = try await resource(target.path, token: accessToken, membership: membership,
+                                                method: "POST", body: JSONEncoder().encode(draft))
+        if status == 400 { throw APIError.actionFailed }
+        if status == 409 { throw APIError.conflict }
+        if status != 201 { try checkResourceStatus(status) }
+        return try JSONDecoder().decode(EstimateClaim.self, from: data)
+    }
+    func claimJobs(accessToken: String, membership: String, picking: Bool, search: String, offset: Int) async throws -> ClaimJobsPage {
+        let query = [URLQueryItem(name: "search", value: search), URLQueryItem(name: "offset", value: String(offset))]
+        let (data, status) = try await resource(picking ? "claims/estimates" : "claims/jobs", token: accessToken, membership: membership, query: query)
+        try checkResourceStatus(status)
+        return try JSONDecoder().decode(ClaimJobsPage.self, from: data)
     }
     private func checkResourceStatus(_ status: Int) throws {
         switch status {
@@ -126,6 +146,63 @@ extension APIClient {
         default: throw APIError.invalidResponse
         }
     }
+}
+
+struct EstimateClaimDraft: Encodable {
+    let id = UUID()
+    var name = ""
+    var location = ""
+    var issueDescription = ""
+    var notes = ""
+}
+
+struct EstimateClaim: Decodable, Identifiable {
+    let id: UUID
+    let name: String
+    let location: String
+    let issueDescription: String
+    let notes: String
+    let createdAt: String
+}
+
+enum ClaimTarget: Hashable {
+    case estimate(Int), job(Int)
+
+    var path: String {
+        switch self {
+        case let .estimate(id): "estimates/\(id)/claims"
+        case let .job(id): "claims/jobs/\(id)"
+        }
+    }
+}
+
+struct ClaimJobsPage: Decodable {
+    let jobs: [ClaimJobRow]
+    let hasMore: Bool
+}
+
+struct ClaimJobRow: Decodable, Identifiable {
+    let jobId: Int
+    let customerName: String
+    let siteAddress: String
+    let projectName: String
+    let estimateNumber: String
+    let invoiceNumber: String
+    let documentId: Int?
+    let claimCount: Int?
+    let lastClaimAt: String?
+    var id: Int { jobId }
+    var title: String { projectName.isEmpty ? customerName : projectName }
+    var summary: String {
+        [projectName.isEmpty ? "" : customerName, siteAddress, estimateNumber, invoiceNumber].filter { !$0.isEmpty }.joined(separator: " · ")
+    }
+}
+
+struct EstimateClaims: Decodable {
+    let archived: Bool
+    let jobId: Int
+    let job: ClaimJobRow?
+    var claims: [EstimateClaim]
 }
 
 
@@ -184,7 +261,10 @@ struct DraftEditor {
         body = body.filter { allowed.contains($0.key) }
         body["nativeAuthoring"] = true
         body["draftOnly"] = id == nil || payload["estimateState"] as? String == "draft"
-        if id == nil { body["estimateState"] = "draft" }
+        if id == nil {
+            body["estimateState"] = "draft"
+            body["projectId"] = payload["projectId"]
+        }
         return try JSONSerialization.data(withJSONObject: body)
     }
     private func decimal(_ value: Any?) -> Decimal? {

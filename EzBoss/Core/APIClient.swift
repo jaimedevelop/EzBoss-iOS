@@ -54,7 +54,11 @@ final class APIClient {
     func resource(_ path: String, token: String, membership: String? = nil, query: [URLQueryItem] = [], method: String = "GET", body: Data? = nil, contentType: String = "application/json", idempotencyKey: String? = nil, providerKey: String? = nil) async throws -> (Data, Int) {
         guard !token.isEmpty else { throw APIError.expiredSession }
         var url = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false)!
-        if !query.isEmpty { url.queryItems = query }
+        if !query.isEmpty {
+            url.queryItems = query
+            // Form-style query parsers otherwise read a literal plus as a space.
+            url.percentEncodedQuery = url.percentEncodedQuery?.replacingOccurrences(of: "+", with: "%2B")
+        }
         var request = URLRequest(url: url.url!)
         request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Accept")
